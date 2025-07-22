@@ -1,0 +1,9 @@
+# Dependencies
+/node_modules
+
+# Environment Variables
+.env
+
+# Database
+database.db
+database.db-journal

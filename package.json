@@ -1,0 +1,17 @@
+{
+  "name": "RelayBot",
+  "version": "1.2.0",
+  "description": "A multi-server message relay bot for Discord with @role linking.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^1.7.1",
+    "better-sqlite3": "^8.5.0",
+    "discord-api-types": "^0.37.58",
+    "discord.js": "^14.13.0",
+    "dotenv": "^16.3.1"
+  }
+}
