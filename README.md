@@ -34,7 +34,7 @@ The easiest way to host your own bot is with Railway. Click the button below to 
 If you prefer to host the bot yourself on a VPS or other service, follow these steps.
 
 **Prerequisites:**
-- [Node.js](https://nodejs.org/en/) (v16.9.0 or higher)
+- [Node.js](https://nodejs.org/en/) (v16.9.0 or higher stable build)
 - A code editor like [VS Code](https://code.visualstudio.com/)
 
 **1. Clone the Repository:**
@@ -138,6 +138,7 @@ Now, when a user pings \`@Leaders\` in Server A, the bot will ping \`@Squad-Lead
 
 - \`/relay help\`: Shows the setup guide.
 - \`/relay create_group\`: Creates a new relay group.
+- \`/relay delete_group\`: Permanently deletes a group and all its settings. Use this to start fresh.
 - \`/relay link_channel\`: Links the current channel to a group.
 - \`/relay unlink_channel\`: Unlinks the current channel.
 - \`/relay map_role\`: Maps a server role to a common name for a group.

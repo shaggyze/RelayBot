@@ -1,20 +1,29 @@
 // commands/invite.js
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const {
+    SlashCommandBuilder,
+    PermissionsBitField,
+    EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle
+} = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('invite')
         .setDescription('Get the invite link to add this bot to another server.'),
     async execute(interaction) {
-        const permissions = new PermissionFlagsBits([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ManageWebhooks,
-            PermissionFlagsBits.ManageMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.ManageRoles,
+        // This is the corrected way to define permissions
+        const permissions = new PermissionsBitField([
+            PermissionsBitField.Flags.ViewChannel,
+            PermissionsBitField.Flags.SendMessages,
+            PermissionsBitField.Flags.ManageWebhooks,
+            PermissionsBitField.Flags.ManageMessages,
+            PermissionsBitField.Flags.ReadMessageHistory,
+            PermissionsBitField.Flags.ManageRoles,
         ]);
 
+        // Generate the invite link
         const inviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${interaction.client.user.id}&permissions=${permissions.valueOf()}&scope=bot%20applications.commands`;
 
         const embed = new EmbedBuilder()
@@ -23,7 +32,7 @@ module.exports = {
             .setDescription('Click the button below to invite the bot. The required permissions are already configured in the link for all features to work correctly.')
             .addFields({
                 name: 'Required Permissions',
-                value: '• Manage Webhooks\n• Manage Messages\n• Manage Roles\n• Send Messages & Read History'
+                value: '• View Channels\n• Manage Webhooks\n• Manage Messages\n• Manage Roles\n• Send Messages & Read History'
             });
 
         const row = new ActionRowBuilder().addComponents(

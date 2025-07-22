@@ -9,7 +9,7 @@ module.exports = {
     async execute(interaction) {
         const versionEmbed = new EmbedBuilder()
             .setColor('#5865F2')
-            .setTitle('Nexus Relay Bot')
+            .setTitle('RelayBot')
             .setDescription(`You are running version **v${version}**.`)
             .addFields(
                 { name: 'Latest Changes', value: '• Added `/relay help` command.\n• Added auto-creation of missing roles.\n• Public release with database support.' },

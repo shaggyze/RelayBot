@@ -8,26 +8,22 @@ console.log('Initializing database...');
 const setupScript = `
     PRAGMA foreign_keys = ON;
 
-    -- Stores relay groups. A group is identified by its name *and* the guild that created it.
-    -- This allows different servers to have groups with the same name without conflict.
     CREATE TABLE IF NOT EXISTS relay_groups (
         group_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id TEXT NOT NULL,
-        group_name TEXT NOT NULL,
-        UNIQUE(guild_id, group_name)
+        group_name TEXT NOT NULL UNIQUE,
+        owner_guild_id TEXT NOT NULL
     );
 
-    -- Stores the channels linked to each relay group.
     CREATE TABLE IF NOT EXISTS linked_channels (
         channel_id TEXT PRIMARY KEY,
         guild_id TEXT NOT NULL,
         group_id INTEGER NOT NULL,
         webhook_url TEXT NOT NULL,
         delete_delay_hours INTEGER DEFAULT 2,
+        reverse_delete_enabled BOOLEAN DEFAULT 0 NOT NULL, -- [NEW] Off by default
         FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE
     );
 
-    -- Maps a common role name (e.g., "K30-31") to a specific role ID for each server in a group.
     CREATE TABLE IF NOT EXISTS role_mappings (
         mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER NOT NULL,
@@ -36,6 +32,15 @@ const setupScript = `
         role_id TEXT NOT NULL,
         FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE,
         UNIQUE(group_id, guild_id, role_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS relayed_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        original_message_id TEXT NOT NULL,
+        original_channel_id TEXT NOT NULL, -- [NEW] We need to know where the original came from
+        relayed_message_id TEXT NOT NULL,
+        relayed_channel_id TEXT NOT NULL,
+        webhook_url TEXT NOT NULL
     );
 `;
 
