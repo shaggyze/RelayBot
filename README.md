@@ -1,4 +1,3 @@
-const readmeContent = `
 # RelayBot
 
 <p align="center">
@@ -141,4 +140,3 @@ The bot now uses **global groups**. One server creates the group, and others lin
 
 ---
 *This bot was originally conceived by YuRaNnNzZZ and ShaggyZE and has been refactored for public use.*
-`;
