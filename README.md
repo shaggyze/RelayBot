@@ -1,7 +1,7 @@
 # RelayBot
 
 <p align="center">
-  <strong>A powerful and easy-to-use Discord bot for relaying messages, edits, deletes, and role pings between channels on different servers.</strong>
+  <strong>A powerful and easy-to-use Discord bot for relaying messages, edits, deletes, and role pings between channels on one or more servers.</strong>
   <br />
   <br />
   <a href="https://discord.gg/tbDeymDm2B"><img src="https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord"/></a>
@@ -28,7 +28,7 @@ There are two ways to use RelayBot: inviting an official public bot (if availabl
 
 The easiest way to host your own bot is with Railway. The button below will guide you through setting up your own private instance.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https%3A%2F%2Fgithub.com%2Fshaggyze%2FRelayBot&envs=DISCORD_TOKEN,CLIENT_ID&DISCORD_TOKENDesc=Your+Discord+bot+token.&CLIENT_IDDesc=Your+bot's+application+ID)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/HbhYGF?referralCode=hmJrvY)
 
 #### Manual Installation & Configuration
 
