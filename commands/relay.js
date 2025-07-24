@@ -16,17 +16,24 @@ module.exports = {
             subcommand.setName('delete_group').setDescription('Deletes a global relay group. (Must be the server that created it).')
                 .addStringOption(option => option.setName('name').setDescription('The name of the global group to permanently delete').setRequired(true)))
         .addSubcommand(subcommand =>
+            subcommand.setName('kick_server').setDescription('Forcibly removes a server from a group you own.') // [NEW]
+                .addStringOption(option => option.setName('group_name').setDescription('The name of the group you own').setRequired(true))
+                .addStringOption(option => option.setName('server_id').setDescription('The ID of the server to kick').setRequired(true)))
+        .addSubcommand(subcommand =>
             subcommand.setName('link_channel').setDescription('Links this channel to a global relay group.')
                 .addStringOption(option => option.setName('group_name').setDescription('The name of the global group to link to').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand.setName('unlink_channel').setDescription('Unlinks this channel from its relay group.'))
+        .addSubcommand(subcommand =>
+            subcommand.setName('list_servers').setDescription('Lists all servers currently linked to a global group.') // [NEW]
+                .addStringOption(option => option.setName('group_name').setDescription('The name of the group to list servers for').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand.setName('map_role').setDescription('Maps a server role to a common name for relaying.')
                 .addStringOption(option => option.setName('group_name').setDescription('The global group this mapping applies to').setRequired(true))
                 .addStringOption(option => option.setName('common_name').setDescription('The shared name for the role (e.g., "K30-31")').setRequired(true))
                 .addRoleOption(option => option.setName('role').setDescription('The actual role to map').setRequired(true)))
         .addSubcommand(subcommand =>
-            subcommand.setName('list_mappings').setDescription('Lists all configured role mappings for a group on this server.') // [NEW]
+            subcommand.setName('list_mappings').setDescription('Lists all configured role mappings for a group on this server.')
                 .addStringOption(option => option.setName('group_name').setDescription('The name of the group to list mappings for').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand.setName('unmap_role').setDescription('Removes a role mapping from a group.')
@@ -55,10 +62,10 @@ module.exports = {
                     .setColor('#5865F2')
                     .setDescription('Follow these steps to connect channels across different servers using global groups.')
                     .addFields(
-                        { name: 'Step 1: Create a GLOBAL Group (On ONE Server Only)', value: 'One server must create the "global" group. The group name must be unique across all servers using this bot.\n`Ex: /relay create_group name: my-cool-alliance-chat`' },
+                        { name: 'Step 1: Create a GLOBAL Group (On ONE Server Only)', value: 'One server must create the "global" group. The name must be unique across all servers using this bot.\n`Ex: /relay create_group name: my-cool-alliance-chat`' },
                         { name: 'Step 2: Link Channels (On ALL Servers)', value: 'Once a global group exists, any server with the bot can link a channel to it by using its name.\n`Ex: /relay link_channel group_name: my-cool-alliance-chat`' },
-                        { name: 'Step 3: Map Roles (Optional)', value: 'To sync role pings, map your server\'s roles to a common name within that global group.\n`Ex: /relay map_role group_name: my-cool-alliance-chat common_name: K30-31 role: @Kingdom-30-31`' },
-                        { name: 'Step 4: Managing Your Setup', value: '• `/relay list_mappings`: See all role mappings for a group.\n' + '• `/relay delete_group`: Deletes a global group (owner only).\n' + '• `/relay toggle_reverse_delete`: Toggle if deleting a relayed message deletes the original.\n' + '• `/relay unlink_channel`: Removes only this channel from a relay.\n' + '• `/relay unmap_role`: Removes a role mapping.\n' + '• `/relay set_delete_delay`: Sets message auto-delete delay.\n' + '• `/version` & `/invite`: Get bot info.' }
+                        { name: 'Step 3: Map Roles (Optional)', value: 'To sync role pings, map your server\'s roles to a common name within that group.\n`Ex: /relay map_role group_name: my-cool-alliance-chat common_name: K30-31 role: @Kingdom-30-31`' },
+                        { name: 'Step 4: Managing Your Setup', value: '• `/relay list_servers`: See all servers in a group.\n' + '• `/relay list_mappings`: See all role mappings for a group.\n' + '• `/relay kick_server`: Forcibly remove a server from a group you own.\n' + '• `/relay delete_group`: Deletes a global group (owner only).\n' + '• `/relay toggle_reverse_delete`: Toggle if deleting a relayed message deletes the original.\n' + '• `/relay unlink_channel`: Removes only this channel from a relay.\n' + '• `/relay unmap_role`: Removes a role mapping.\n' + '• `/relay set_delete_delay`: Sets message auto-delete delay.\n' + '• `/version` & `/invite`: Get bot info.' }
                     )
                     .setFooter({ text: `RelayBot v${require('../package.json').version}` });
                 await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
@@ -76,6 +83,24 @@ module.exports = {
 
                 db.prepare('DELETE FROM relay_groups WHERE group_id = ?').run(group.group_id);
                 await interaction.reply({ content: `✅ Successfully deleted global group "**${groupName}**". All linked channels across all servers have been disconnected.`, ephemeral: true });
+
+            } else if (subcommand === 'kick_server') {
+                const groupName = interaction.options.getString('group_name');
+                const serverIdToKick = interaction.options.getString('server_id');
+                const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
+
+                if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists.`, ephemeral: true });
+                if (group.owner_guild_id !== guildId) return interaction.reply({ content: `❌ You cannot manage this group because your server did not create it.`, ephemeral: true });
+                if (serverIdToKick === guildId) return interaction.reply({ content: `❌ You cannot kick your own server. Use \`/relay delete_group\` to delete the whole group instead.`, ephemeral: true });
+
+                const kickChannels = db.prepare('DELETE FROM linked_channels WHERE group_id = ? AND guild_id = ?').run(group.group_id, serverIdToKick);
+                db.prepare('DELETE FROM role_mappings WHERE group_id = ? AND guild_id = ?').run(group.group_id, serverIdToKick);
+
+                if (kickChannels.changes > 0) {
+                    await interaction.reply({ content: `✅ Successfully kicked server \`${serverIdToKick}\` from the "**${groupName}**" group. All its linked channels and role mappings have been removed.`, ephemeral: true });
+                } else {
+                    await interaction.reply({ content: `That server was not found in the "**${groupName}**" group. No action was taken.`, ephemeral: true });
+                }
 
             } else if (subcommand === 'link_channel') {
                 const groupName = interaction.options.getString('group_name');
@@ -97,6 +122,26 @@ module.exports = {
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelId);
                 await interaction.reply({ content: `✅ This channel has been unlinked from its group.`, ephemeral: true });
 
+            } else if (subcommand === 'list_servers') {
+                const groupName = interaction.options.getString('group_name');
+                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+                if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists.`, ephemeral: true });
+
+                const linkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
+                if (linkedGuilds.length === 0) return interaction.reply({ content: `There are no servers currently linked to group "**${groupName}**".`, ephemeral: true });
+                
+                const serverList = linkedGuilds.map(row => {
+                    const guild = interaction.client.guilds.cache.get(row.guild_id);
+                    return `• **${guild ? guild.name : 'Unknown Server'}** (ID: \`${row.guild_id}\`)`;
+                }).join('\n');
+
+                const listEmbed = new EmbedBuilder()
+                    .setTitle(`Servers in Group "${groupName}"`)
+                    .setColor('#5865F2')
+                    .setDescription(serverList);
+                
+                await interaction.reply({ embeds: [listEmbed], ephemeral: true });
+
             } else if (subcommand === 'map_role') {
                 const groupName = interaction.options.getString('group_name');
                 const commonName = interaction.options.getString('common_name');
@@ -114,21 +159,10 @@ module.exports = {
                 if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists.`, ephemeral: true });
 
                 const mappings = db.prepare('SELECT role_name, role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? ORDER BY role_name').all(group.group_id, guildId);
+                if (mappings.length === 0) return interaction.reply({ content: `There are no role mappings configured for group "**${groupName}**" on this server.`, ephemeral: true });
 
-                if (mappings.length === 0) {
-                    return interaction.reply({ content: `There are no role mappings configured for group "**${groupName}**" on this server.`, ephemeral: true });
-                }
-
-                const description = mappings
-                    .map(m => `**${m.role_name}** → <@&${m.role_id}>`)
-                    .join('\n');
-
-                const listEmbed = new EmbedBuilder()
-                    .setTitle(`Role Mappings for Group "${groupName}"`)
-                    .setColor('#5865F2')
-                    .setDescription(description)
-                    .setFooter({ text: `Showing mappings for this server only.` });
-
+                const description = mappings.map(m => `**${m.role_name}** → <@&${m.role_id}>`).join('\n');
+                const listEmbed = new EmbedBuilder().setTitle(`Role Mappings for Group "${groupName}"`).setColor('#5865F2').setDescription(description).setFooter({ text: `Showing mappings for this server only.` });
                 await interaction.reply({ embeds: [listEmbed], ephemeral: true });
             
             } else if (subcommand === 'unmap_role') {
@@ -148,13 +182,10 @@ module.exports = {
             
             } else if (subcommand === 'toggle_reverse_delete') {
                 const channelLink = db.prepare('SELECT reverse_delete_enabled FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!channelLink) {
-                    return interaction.reply({ content: 'This channel is not a linked relay channel.', ephemeral: true });
-                }
+                if (!channelLink) return interaction.reply({ content: 'This channel is not a linked relay channel.', ephemeral: true });
 
                 const newValue = !channelLink.reverse_delete_enabled;
-                db.prepare('UPDATE linked_channels SET reverse_delete_enabled = ? WHERE channel_id = ?')
-                  .run(newValue ? 1 : 0, channelId);
+                db.prepare('UPDATE linked_channels SET reverse_delete_enabled = ? WHERE channel_id = ?').run(newValue ? 1 : 0, channelId);
                 
                 const status = newValue ? 'ENABLED' : 'DISABLED';
                 await interaction.reply({ content: `✅ Reverse deletion for this channel is now **${status}**. When a relayed message is deleted in another server, the original message in this channel will also be deleted.`, ephemeral: true });
@@ -167,7 +198,7 @@ module.exports = {
             } else if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
                 await interaction.reply({ content: `❌ **Error:** A global group with that name already exists. Please choose a unique name, or link to the existing one.`, ephemeral: true });
             } else {
-                if (interaction.deferred || interaction.replied) {
+                if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({ content: 'An unknown error occurred.', ephemeral: true });
                 } else {
                     await interaction.reply({ content: 'An unknown error occurred.', ephemeral: true });

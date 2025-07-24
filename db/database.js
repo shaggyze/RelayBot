@@ -19,8 +19,8 @@ const setupScript = `
         guild_id TEXT NOT NULL,
         group_id INTEGER NOT NULL,
         webhook_url TEXT NOT NULL,
-        delete_delay_hours INTEGER DEFAULT 2,
-        reverse_delete_enabled BOOLEAN DEFAULT 0 NOT NULL, -- [NEW] Off by default
+        delete_delay_hours INTEGER DEFAULT 0 NOT NULL,
+        reverse_delete_enabled BOOLEAN DEFAULT 0 NOT NULL,
         FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE
     );
 
@@ -37,7 +37,7 @@ const setupScript = `
     CREATE TABLE IF NOT EXISTS relayed_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         original_message_id TEXT NOT NULL,
-        original_channel_id TEXT NOT NULL, -- [NEW] We need to know where the original came from
+        original_channel_id TEXT NOT NULL,
         relayed_message_id TEXT NOT NULL,
         relayed_channel_id TEXT NOT NULL,
         webhook_url TEXT NOT NULL

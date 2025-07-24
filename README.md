@@ -15,7 +15,7 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 - **Full Message Syncing:** Messages, edits, deletes, replies, and attachments are all synced across relayed channels.
 - **Dynamic Role Mapping:** Mention a role in one server, and RelayBot will intelligently ping the correctly mapped role in all other linked servers.
 - **Auto-Role Creation:** If a mapped role doesn't exist on a target server, the bot will automatically create it for you.
-- **Reverse Deletion (Opt-in):** Configure the bot to delete the original message if a relayed copy is deleted.
+- **Reverse Deletion (Opt-in):** Configure the bot to delete the original message if a relayed copy is deleted (off by default).
 - **Server Context:** Relayed messages clearly show the sender's name and their original server (e.g., `ShaggyZE (Server A)`).
 - **Easy Setup:** All configuration is done through user-friendly \`/\` slash commands. No coding required.
 - **Scalable & Secure:** Built with a robust database backend to ensure every server's configuration is separate and secure.
@@ -120,6 +120,8 @@ The bot now uses **global groups**. One server creates the group, and others lin
 **Group Management:**
 - \`/relay create_group\`: Creates a new, unique global group.
 - \`/relay delete_group\`: Deletes a global group (can only be run by the creating server).
+- \`/relay kick_server\`: Forcibly remove a server from a group you own.
+- \`/relay list_servers\`: See all servers currently in a group.
 
 **Channel Management:**
 - \`/relay link_channel\`: Links the current channel to a global group.
@@ -131,7 +133,7 @@ The bot now uses **global groups**. One server creates the group, and others lin
 - \`/relay unmap_role\`: Removes a specific role mapping.
 
 **Settings:**
-- \`/relay set_delete_delay\`: Sets how long until relayed messages are auto-deleted.
+- \`/relay set_delete_delay\`: Sets how long until relayed messages are auto-deleted (off by default).
 - \`/relay toggle_reverse_delete\`: Toggles if deleting a relayed message also deletes the original message (off by default).
 
 **Utility:**
