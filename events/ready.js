@@ -12,15 +12,14 @@ module.exports = {
 
         // Start the message cleanup interval (runs every 15 minutes)
         setInterval(() => {
-            console.log('Running scheduled message cleanup...');
-            
+
             // [CHANGED] This query is now more efficient and only gets channels with a delay set.
             const channelsToClean = db.prepare('SELECT channel_id, delete_delay_hours FROM linked_channels WHERE delete_delay_hours > 0').all();
 
             for (const item of channelsToClean) {
                 // Since the query now ensures delete_delay_hours > 0, we don't need an extra check here.
                 const delayMs = item.delete_delay_hours * 60 * 60 * 1000;
-                
+
                 client.channels.fetch(item.channel_id).then(channel => {
                     if (!channel) return;
 
