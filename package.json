@@ -1,6 +1,6 @@
 {
   "name": "RelayBot",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "A multi-server message relay bot for Discord with @role linking.",
   "main": "index.js",
   "scripts": {
@@ -8,6 +8,7 @@
     "deploy": "node deploy-commands.js"
   },
   "dependencies": {
+    "@blackglory/better-sqlite3-migrations": "github:BlackGlory/better-sqlite3-migrations",
     "@discordjs/rest": "^1.7.1",
     "better-sqlite3": "^8.5.0",
     "discord-api-types": "^0.37.58",
