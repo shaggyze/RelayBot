@@ -2,7 +2,6 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { migrate } = require('@blackglory/better-sqlite3-migrations');
 
 // --- Define Paths ---
 const volumePath = '/data';
@@ -11,53 +10,72 @@ const dbName = 'database.db';
 let primaryDbPath;
 let isUsingVolume = false;
 
-// --- Step 1: Determine the Primary Database Path ---
+// --- Determine the Primary Database Path ---
 if (fs.existsSync(volumePath)) {
-    // A persistent volume is attached. This is our primary source of truth.
     isUsingVolume = true;
     primaryDbPath = path.join(volumePath, dbName);
     console.log(`[DB] Persistent volume detected. Using primary database at: ${primaryDbPath}`);
 } else {
-    // No volume detected. Fallback to the ephemeral root directory.
-    // This will be used when running locally, on a free plan, or after a volume is detached.
     primaryDbPath = path.join(rootPath, dbName);
     console.log(`[DB] No persistent volume detected. Using ephemeral database at: ${primaryDbPath}`);
 }
 
-// --- Step 2: Connect to the Primary Database ---
 const db = new Database(primaryDbPath);
 
-// --- Step 3: Run Migrations on the Primary Database ---
-console.log('[DB] Running migrations on primary database...');
-try {
-  migrate(db, {
-    migrationsPath: path.join(__dirname, '../migrations'),
-  });
-  console.log('[DB] Primary database is up to date.');
-} catch (err) {
-  console.error('[DB] Migration failed:', err);
-  process.exit(1);
-}
+// --- [REVERTED] Use the original, reliable setup script ---
+console.log('[DB] Initializing database schema...');
+const setupScript = `
+    PRAGMA foreign_keys = ON;
 
-// --- Step 4: [YOUR FEATURE] Create the "Hot Spare" Backup in the Root Directory ---
+    CREATE TABLE IF NOT EXISTS relay_groups (
+        group_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_name TEXT NOT NULL UNIQUE,
+        owner_guild_id TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS linked_channels (
+        channel_id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        group_id INTEGER NOT NULL,
+        webhook_url TEXT NOT NULL,
+        delete_delay_hours INTEGER DEFAULT 0 NOT NULL,
+        reverse_delete_enabled BOOLEAN DEFAULT 0 NOT NULL,
+        FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS role_mappings (
+        mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        role_name TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE,
+        UNIQUE(group_id, guild_id, role_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS relayed_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        original_message_id TEXT NOT NULL,
+        original_channel_id TEXT NOT NULL,
+        relayed_message_id TEXT NOT NULL,
+        relayed_channel_id TEXT NOT NULL,
+        webhook_url TEXT NOT NULL
+    );
+`;
+db.exec(setupScript);
+console.log('[DB] Database schema initialized.');
+
+// --- "Hot Spare" Backup Logic ---
 if (isUsingVolume) {
-    // This block only runs if our primary database is on the permanent volume.
     const spareDbPath = path.join(rootPath, dbName);
     console.log(`[DB] Syncing persistent data from volume to ephemeral spare at: ${spareDbPath}`);
     try {
-        // Use the built-in backup feature for a safe and efficient copy.
-        // This overwrites the ephemeral DB with the latest data from the permanent one.
         db.backup(spareDbPath)
-            .then(() => {
-                console.log('[DB] Hot spare sync successful.');
-            })
-            .catch((backupErr) => {
-                console.error('[DB] Hot spare sync failed:', backupErr);
-            });
+            .then(() => console.log('[DB] Hot spare sync successful.'))
+            .catch((backupErr) => console.error('[DB] Hot spare sync failed:', backupErr));
     } catch (backupErr) {
         console.error('[DB] An immediate error occurred during hot spare sync initiation:', backupErr);
     }
 }
 
-// --- Step 5: Export the connection to the primary database ---
 module.exports = db;
