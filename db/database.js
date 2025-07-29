@@ -2,37 +2,62 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { migrate } = require('better-sqlite3-migrations');
+const { migrate } = require('@blackglory/better-sqlite3-migrations');
 
-// [NEW] Flexible database path logic
+// --- Define Paths ---
 const volumePath = '/data';
-let dbPath;
+const rootPath = process.cwd(); // This is /app on Railway
+const dbName = 'database.db';
+let primaryDbPath;
+let isUsingVolume = false;
 
+// --- Step 1: Determine the Primary Database Path ---
 if (fs.existsSync(volumePath)) {
-    // A persistent volume is attached (like on a paid Railway plan).
-    // Use the database file inside the volume.
-    dbPath = path.join(volumePath, 'database.db');
-    console.log(`Persistent volume at '${volumePath}' detected. Using database at: ${dbPath}`);
+    // A persistent volume is attached. This is our primary source of truth.
+    isUsingVolume = true;
+    primaryDbPath = path.join(volumePath, dbName);
+    console.log(`[DB] Persistent volume detected. Using primary database at: ${primaryDbPath}`);
 } else {
-    // No volume detected (running locally or on a free/ephemeral plan).
-    // Use a local database file in the project root.
-    dbPath = 'database.db';
-    console.log(`No persistent volume detected. Using local database at: ${dbPath}`);
+    // No volume detected. Fallback to the ephemeral root directory.
+    // This will be used when running locally, on a free plan, or after a volume is detached.
+    primaryDbPath = path.join(rootPath, dbName);
+    console.log(`[DB] No persistent volume detected. Using ephemeral database at: ${primaryDbPath}`);
 }
 
-const db = new Database(dbPath);
+// --- Step 2: Connect to the Primary Database ---
+const db = new Database(primaryDbPath);
 
-console.log('Running database migrations...');
-
+// --- Step 3: Run Migrations on the Primary Database ---
+console.log('[DB] Running migrations on primary database...');
 try {
-  // The migration runner works perfectly with either path.
   migrate(db, {
     migrationsPath: path.join(__dirname, '../migrations'),
   });
-  console.log('Database is up to date.');
+  console.log('[DB] Primary database is up to date.');
 } catch (err) {
-  console.error('Migration failed:', err);
+  console.error('[DB] Migration failed:', err);
   process.exit(1);
 }
 
+// --- Step 4: [YOUR FEATURE] Create the "Hot Spare" Backup in the Root Directory ---
+if (isUsingVolume) {
+    // This block only runs if our primary database is on the permanent volume.
+    const spareDbPath = path.join(rootPath, dbName);
+    console.log(`[DB] Syncing persistent data from volume to ephemeral spare at: ${spareDbPath}`);
+    try {
+        // Use the built-in backup feature for a safe and efficient copy.
+        // This overwrites the ephemeral DB with the latest data from the permanent one.
+        db.backup(spareDbPath)
+            .then(() => {
+                console.log('[DB] Hot spare sync successful.');
+            })
+            .catch((backupErr) => {
+                console.error('[DB] Hot spare sync failed:', backupErr);
+            });
+    } catch (backupErr) {
+        console.error('[DB] An immediate error occurred during hot spare sync initiation:', backupErr);
+    }
+}
+
+// --- Step 5: Export the connection to the primary database ---
 module.exports = db;
