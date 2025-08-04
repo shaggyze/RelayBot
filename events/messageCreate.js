@@ -30,16 +30,18 @@ module.exports = {
         
         console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
         
-        const username = `${message.member.displayName} (${message.guild.name})`;
+        const senderName = message.member?.displayName ?? message.author.username;
+        const username = `${senderName} (${message.guild.name})`;
         const avatarURL = message.author.displayAvatarURL();
         
         for (const target of targetChannels) {
-            console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${target.channel.name}`);
+            // [FIX APPLIED HERE]
+            const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
+            console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
             try {
                 let targetContent = message.content;
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);
 
-                // [RESTORED] Detailed role mapping logs
                 if (roleMentions) {
                     console.log(`[ROLES] Found ${roleMentions.length} role mention(s). Processing for target guild ${target.guild_id}.`);
                     for (const mention of roleMentions) {
@@ -88,7 +90,6 @@ module.exports = {
                     allowedMentions: { parse: ['roles'] }
                 });
 
-                // [CHANGED AS REQUESTED] The success log now includes the group name.
                 console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
                 
                 db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
