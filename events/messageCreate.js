@@ -34,7 +34,7 @@ module.exports = {
         const avatarURL = message.author.displayAvatarURL();
         
         for (const target of targetChannels) {
-            console.log(`[RELAY] Attempting to relay message ${message.id} to channel ${target.channel_id}`);
+            console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${target.channel.name}`);
             try {
                 let targetContent = message.content;
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);

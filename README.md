@@ -23,6 +23,9 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 ## 🚀 Getting Started
 
 There are two ways to use RelayBot: inviting an official public bot (if available) or self-hosting your own private instance for full control.
+### Public-Hosting
+
+- [top.gg](https://top.gg/bot/1397069734469435446) (public bot on railway.app)
 
 ### Self-Hosting (Recommended)
 
@@ -99,6 +102,8 @@ Configuration is done via the \`/relay\` command. You must have the \`Manage Ser
 ### The Setup Workflow
 
 The bot now uses **global groups**. One server creates the group, and others link to it.
+
+** For #testing use https://discord.gg/tbDeymDm2B and group my-super-unique-alliance **
 
 1.  **On ONE Server Only - Create a Global Group:**
     An admin on your "main" server creates the group. The name must be unique across all servers using this bot.
