@@ -11,12 +11,12 @@ module.exports = {
             subcommand.setName('help').setDescription('Shows a guide on how to set up and use the relay bot.'))
         .addSubcommand(subcommand =>
             subcommand.setName('create_group').setDescription('Creates a new GLOBAL relay group that other servers can link to.')
-                .addStringOption(option => option.setName('name').setDescription('The globally unique name for the new group (e.g., "my-cool-alliance")').setRequired(true)))
+                .addStringOption(option => option.setName('name').setDescription('The globally unique name for the new group (e.g., "my-super-unique-alliance")').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand.setName('delete_group').setDescription('Deletes a global relay group. (Must be the server that created it).')
                 .addStringOption(option => option.setName('name').setDescription('The name of the global group to permanently delete').setRequired(true)))
         .addSubcommand(subcommand =>
-            subcommand.setName('kick_server').setDescription('Forcibly removes a server from a group you own.') // [NEW]
+            subcommand.setName('kick_server').setDescription('Forcibly removes a server from a group you own.')
                 .addStringOption(option => option.setName('group_name').setDescription('The name of the group you own').setRequired(true))
                 .addStringOption(option => option.setName('server_id').setDescription('The ID of the server to kick').setRequired(true)))
         .addSubcommand(subcommand =>
@@ -25,7 +25,7 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand.setName('unlink_channel').setDescription('Unlinks this channel from its relay group.'))
         .addSubcommand(subcommand =>
-            subcommand.setName('list_servers').setDescription('Lists all servers currently linked to a global group.') // [NEW]
+            subcommand.setName('list_servers').setDescription('Lists all servers currently linked to a global group.')
                 .addStringOption(option => option.setName('group_name').setDescription('The name of the group to list servers for').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand.setName('map_role').setDescription('Maps a server role to a common name for relaying.')
@@ -103,6 +103,18 @@ module.exports = {
                 }
 
             } else if (subcommand === 'link_channel') {
+                // [NEW] Proactively check if the bot has the 'Manage Webhooks' permission in this channel.
+                const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
+                if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks)) {
+                    const errorEmbed = new EmbedBuilder()
+                        .setColor('#ED4245') // Discord's red color
+                        .setTitle('Permission Error')
+                        .setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`)
+                        .addFields({ name: 'How to Fix', value: 'An admin needs to go to `Edit Channel` > `Permissions` and ensure my role ("RelayBot") has the "Manage Webhooks" permission enabled here.' });
+                    
+                    return interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                }
+
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
                 if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.`, ephemeral: true });
@@ -135,11 +147,7 @@ module.exports = {
                     return `• **${guild ? guild.name : 'Unknown Server'}** (ID: \`${row.guild_id}\`)`;
                 }).join('\n');
 
-                const listEmbed = new EmbedBuilder()
-                    .setTitle(`Servers in Group "${groupName}"`)
-                    .setColor('#5865F2')
-                    .setDescription(serverList);
-                
+                const listEmbed = new EmbedBuilder().setTitle(`Servers in Group "${groupName}"`).setColor('#5865F2').setDescription(serverList);
                 await interaction.reply({ embeds: [listEmbed], ephemeral: true });
 
             } else if (subcommand === 'map_role') {
@@ -194,9 +202,10 @@ module.exports = {
         } catch (error) {
             console.error(`Error in /relay ${subcommand}:`, error);
             if (error.code === 50013) {
-                await interaction.reply({ content: '❌ **Error:** I am missing permissions! Please ensure I have the `Manage Webhooks` and `Manage Roles` permissions.', ephemeral: true });
+                // This is now a fallback, as our proactive check should catch most cases.
+                await interaction.reply({ content: '❌ **Error:** I am missing critical permissions! Please ensure I have the `Manage Webhooks` and `Manage Roles` permissions.', ephemeral: true });
             } else if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                await interaction.reply({ content: `❌ **Error:** A global group with that name already exists. Please choose a unique name, or link to the existing one.`, ephemeral: true });
+                await interaction.reply({ content: `❌ **Error:** A global group named "**${interaction.options.getString('name')}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.`, ephemeral: true });
             } else {
                 if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({ content: 'An unknown error occurred.', ephemeral: true });
