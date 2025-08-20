@@ -72,9 +72,19 @@ module.exports = {
 
             } else if (subcommand === 'create_group') {
                 const groupName = interaction.options.getString('name');
-                db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id) VALUES (?, ?)').run(groupName, guildId);
-                await interaction.reply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.`, ephemeral: true });
-
+                // Add a dedicated try/catch for this specific, expected error.
+                try {
+                    db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id) VALUES (?, ?)').run(groupName, guildId);
+                    await interaction.reply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.`, ephemeral: true });
+                } catch (error) {
+                    // If the error is a UNIQUE constraint failure, handle it gracefully without logging a scary error.
+                    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+                        await interaction.reply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.`, ephemeral: true });
+                    } else {
+                        // If it's a different, unexpected error, let the main catch block at the bottom of the file handle it.
+                        throw error;
+                    }
+                }
             } else if (subcommand === 'delete_group') {
                 const groupName = interaction.options.getString('name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
