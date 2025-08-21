@@ -137,16 +137,6 @@ module.exports = {
                 db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url) VALUES (?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhook.url);
                 await interaction.reply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" relay group.`, ephemeral: true });
 
-            } 
-
-                const groupName = interaction.options.getString('group_name');
-                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.`, ephemeral: true });
-
-                const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
-                db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url) VALUES (?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhook.url);
-                await interaction.reply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" relay group.`, ephemeral: true });
-
             } else if (subcommand === 'unlink_channel') {
                 const link = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
                 if (!link) return interaction.reply({ content: `This channel is not linked to any relay group.`, ephemeral: true });
