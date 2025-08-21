@@ -113,17 +113,31 @@ module.exports = {
                 }
 
             } else if (subcommand === 'link_channel') {
-                // [NEW] Proactively check if the bot has the 'Manage Webhooks' permission in this channel.
+                // [FIX 1] Proactively check if this channel is already linked.
+                const existingLink = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
+                if (existingLink) {
+                    return interaction.reply({ content: '❌ **Error:** This channel is already linked to a relay group. Please use `/relay unlink_channel` before trying to link it to a new one.', ephemeral: true });
+                }
+
+                // Proactively check for webhook permissions.
                 const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
                 if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks)) {
                     const errorEmbed = new EmbedBuilder()
-                        .setColor('#ED4245') // Discord's red color
-                        .setTitle('Permission Error')
+                        .setColor('#ED4245').setTitle('Permission Error')
                         .setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`)
                         .addFields({ name: 'How to Fix', value: 'An admin needs to go to `Edit Channel` > `Permissions` and ensure my role ("RelayBot") has the "Manage Webhooks" permission enabled here.' });
-                    
                     return interaction.reply({ embeds: [errorEmbed], ephemeral: true });
                 }
+
+                const groupName = interaction.options.getString('group_name');
+                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+                if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.`, ephemeral: true });
+
+                const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
+                db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url) VALUES (?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhook.url);
+                await interaction.reply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" relay group.`, ephemeral: true });
+
+            } 
 
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
@@ -211,12 +225,16 @@ module.exports = {
 
         } catch (error) {
             console.error(`Error in /relay ${subcommand}:`, error);
-            if (error.code === 50013) {
-                // This is now a fallback, as our proactive check should catch most cases.
+			// [FIX 2] Add a specific catch for the webhook limit error.
+            if (error.code === 30007) {
+                await interaction.reply({ content: `❌ **Error:** This channel has reached the maximum number of webhooks (15). I cannot create a new one. An admin must delete an unused webhook from \`Edit Channel\` > \`Integrations\` > \`Webhooks\` before I can link this channel.`, ephemeral: true });
+            } else if (error.code === 50013) {
                 await interaction.reply({ content: '❌ **Error:** I am missing critical permissions! Please ensure I have the `Manage Webhooks` and `Manage Roles` permissions.', ephemeral: true });
-            } else if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                await interaction.reply({ content: `❌ **Error:** A global group named "**${interaction.options.getString('name')}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.`, ephemeral: true });
+            } else if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+                // This is now a fallback, but the proactive check should catch it first.
+                await interaction.reply({ content: `❌ **Error:** An item with that name or ID already exists in the database.`, ephemeral: true });
             } else {
+                console.error(`Error in /relay ${subcommand}:`, error);
                 if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({ content: 'An unknown error occurred.', ephemeral: true });
                 } else {
