@@ -9,6 +9,12 @@ module.exports = {
     async execute(message) {
         if (message.author.bot || !message.guild) return;
 
+        // [NEW] Add a guard to ignore truly empty messages (e.g., sticker-only messages)
+        if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) {
+            console.log(`[DEBUG] Message ${message.id} from ${message.author.tag} was ignored because it is effectively empty.`);
+            return;
+        }
+
         const sourceChannelInfo = db.prepare('SELECT * FROM linked_channels WHERE channel_id = ?').get(message.channel.id);
         if (!sourceChannelInfo) return; // Not a relay channel, ignore silently.
 
@@ -80,7 +86,7 @@ module.exports = {
                 }
 
                 const relayedMessage = await webhookClient.send({
-                    content: targetContent || ' ',
+                    content: targetContent, // No longer need the `|| ' '` fallback because of our new guard clause.
                     username: username,
                     avatarURL: avatarURL,
                     files: message.attachments.map(att => att.url),
@@ -94,7 +100,7 @@ module.exports = {
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
             } catch (error) {
-                if (error.code === 10015) { // 10015 = Unknown Webhook
+                if (error.code === 10015) { // Unknown Webhook
                     console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} (${target.channel_id}) is invalid or was deleted. Removing from the relay group.`);
                     db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                 } else {
