@@ -36,7 +36,15 @@ module.exports = {
             try {
                 const webhookClient = new WebhookClient({ url: relayed.webhook_url });
                 await webhookClient.deleteMessage(relayed.relayed_message_id);
-            } catch { /* Ignore errors, message may already be gone */ }
+            } catch (error) {
+                if (error.code === 10015) {
+                    const channelName = message.client.channels.cache.get(relayed.relayed_channel_id)?.name ?? relayed.relayed_channel_id;
+                    console.error(`[AUTO-CLEANUP] Webhook for channel #${channelName} (${relayed.relayed_channel_id}) is invalid during delete. Removing from the relay group.`);
+                    db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(relayed.relayed_channel_id);
+                } else {
+                    // Ignore other errors, as the message may have already been deleted by another process.
+                }
+            }
         }
         
         db.prepare('DELETE FROM relayed_messages WHERE original_message_id = ?').run(message.id);

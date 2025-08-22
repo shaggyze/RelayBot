@@ -12,7 +12,6 @@ module.exports = {
         const sourceChannelInfo = db.prepare('SELECT * FROM linked_channels WHERE channel_id = ?').get(message.channel.id);
         if (!sourceChannelInfo) return; // Not a relay channel, ignore silently.
 
-        // Get the group's information to use in logging.
         const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
         if (!groupInfo) {
             console.error(`[ERROR] A linked channel (${message.channel.id}) exists for a group_id (${sourceChannelInfo.group_id}) that has been deleted. Cleaning up...`);
@@ -35,7 +34,6 @@ module.exports = {
         const avatarURL = message.author.displayAvatarURL();
         
         for (const target of targetChannels) {
-            // [FIX APPLIED HERE]
             const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
             console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
             try {
@@ -96,7 +94,12 @@ module.exports = {
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
             } catch (error) {
-                console.error(`[RELAY] FAILED to relay message to channel ${target.channel_id}:`, error);
+                if (error.code === 10015) { // 10015 = Unknown Webhook
+                    console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} (${target.channel_id}) is invalid or was deleted. Removing from the relay group.`);
+                    db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
+                } else {
+                    console.error(`[RELAY] FAILED to relay message to channel ${target.channel_id}:`, error);
+                }
             }
         }
     },
