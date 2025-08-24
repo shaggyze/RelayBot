@@ -1,7 +1,8 @@
 // events/ready.js
-const { Events, ActivityType } = require('discord.js');
+const { Events, ActivityType, WebhookClient } = require('discord.js');
 const db = require('../db/database.js');
 const { version } = require('../package.json');
+const { createVoteMessage } = require('../utils/voteEmbed.js'); // Import our new utility
 
 module.exports = {
     name: Events.ClientReady,
@@ -10,28 +11,51 @@ module.exports = {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
 
-        // Start the message cleanup interval (runs every 15 minutes)
+        // --- Task 1: Message Cleanup (runs every 15 minutes) ---
         setInterval(() => {
-
-            // [CHANGED] This query is now more efficient and only gets channels with a delay set.
+            console.log('[Tasks] Running scheduled message cleanup...');
             const channelsToClean = db.prepare('SELECT channel_id, delete_delay_hours FROM linked_channels WHERE delete_delay_hours > 0').all();
-
             for (const item of channelsToClean) {
-                // Since the query now ensures delete_delay_hours > 0, we don't need an extra check here.
                 const delayMs = item.delete_delay_hours * 60 * 60 * 1000;
-
                 client.channels.fetch(item.channel_id).then(channel => {
-                    if (!channel) return;
-
-                    channel.messages.fetch({ limit: 100 }).then(messages => {
+                    if (channel) channel.messages.fetch({ limit: 100 }).then(messages => {
                         messages.forEach(message => {
                             if (message.webhookId && (Date.now() - message.createdTimestamp > delayMs)) {
-                                message.delete().catch(err => console.error(`[Cleanup] Failed to delete message ${message.id}: ${err.message}`));
+                                message.delete().catch(() => {});
                             }
                         });
-                    }).catch(err => console.error(`[Cleanup] Failed to fetch messages in ${item.channel_id}: ${err.message}`));
-                }).catch(err => console.error(`[Cleanup] Failed to fetch channel ${item.channel_id}: ${err.message}`));
+                    });
+                }).catch(() => {});
             }
-        }, 15 * 60 * 1000); // 15 minutes
+        }, 15 * 60 * 1000);
+
+        // --- [NEW] Task 2: Daily Vote Reminder (runs every 24 hours) ---
+        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+        setInterval(() => {
+            console.log('[Tasks] Sending daily vote reminder to all linked channels.');
+
+            // Get the message payload from our utility file.
+            const votePayload = createVoteMessage();
+            
+            // Add the bot's own branding for the webhook message.
+            votePayload.username = 'RelayBot';
+            votePayload.avatarURL = client.user.displayAvatarURL();
+            
+            // Get all unique webhook URLs from the database.
+            const allLinkedChannels = db.prepare('SELECT webhook_url FROM linked_channels').all();
+            
+            if (allLinkedChannels.length > 0) {
+                console.log(`[Tasks] Found ${allLinkedChannels.length} channel(s) to send reminder to.`);
+                
+                allLinkedChannels.forEach(channel => {
+                    try {
+                        const webhookClient = new WebhookClient({ url: channel.webhook_url });
+                        webhookClient.send(votePayload).catch(() => {}); // Send and forget, ignore errors
+                    } catch {
+                        // Ignore errors from invalid webhook URLs
+                    }
+                });
+            }
+        }, twentyFourHoursInMs);
     },
 };
