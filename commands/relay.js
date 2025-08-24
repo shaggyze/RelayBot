@@ -216,7 +216,6 @@ module.exports = {
                 
                 const status = newValue ? 'ENABLED' : 'DISABLED';
                 await interaction.reply({ content: `✅ Forward deletion for this channel is now **${status}**. When a message is deleted here, its relayed copies will also be deleted.`, ephemeral: true });
-            }
 
             else if (subcommand === 'toggle_reverse_delete') {
                 const channelLink = db.prepare('SELECT allow_reverse_delete FROM linked_channels WHERE channel_id = ?').get(channelId);
