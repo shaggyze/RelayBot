@@ -2,8 +2,8 @@
 const https = require('https');
 
 // [NEW] Add URLs for both files.
-const PATRON_LIST_URL = 'https://your-domain.com/path/to/patrons.txt'; // Replace with your URL
-const VOTER_LIST_URL = 'https://your-domain.com/path/to/voters.txt';   // Replace with your URL
+const PATRON_LIST_URL = 'https://shaggyze.website/patrons.txt';
+const VOTER_LIST_URL = 'https://shaggyze.website/voters.txt';
 
 let supporterIds = new Set();
 
