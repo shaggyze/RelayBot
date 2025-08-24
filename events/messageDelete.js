@@ -12,11 +12,10 @@ module.exports = {
             const link = db.prepare('SELECT original_message_id, original_channel_id FROM relayed_messages WHERE relayed_message_id = ?').get(message.id);
             if (!link) return;
 
-            // [CORRECT LOGIC] Check the setting of the *original* channel where the message came from.
+            // [CORRECT LOGIC] Check the 'allow_reverse_delete' setting of the *original* channel.
             const sourceChannelSettings = db.prepare('SELECT allow_reverse_delete FROM linked_channels WHERE channel_id = ?').get(link.original_channel_id);
             if (!sourceChannelSettings || !sourceChannelSettings.allow_reverse_delete) {
-                // Reverse delete is OFF for the source channel, so we do nothing.
-                return;
+                return; // Reverse delete is OFF for the source channel, so do nothing.
             }
 
             console.log(`[REVERSE-DELETE] Relayed message ${message.id} deleted. Attempting to delete original message ${link.original_message_id}.`);
@@ -33,7 +32,7 @@ module.exports = {
         }
 
         // CASE 2: The deleted message was a user's original message
-        // [CORRECT LOGIC] Check the setting of the channel where the user deleted their message.
+        // [CORRECT LOGIC] Check the 'allow_forward_delete' setting of the channel where the message was deleted.
         const sourceChannelSettings = db.prepare('SELECT allow_forward_delete FROM linked_channels WHERE channel_id = ?').get(message.channel.id);
         if (!sourceChannelSettings || !sourceChannelSettings.allow_forward_delete) {
             // Forward delete is OFF for this channel, so we do nothing.
