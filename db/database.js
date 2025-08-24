@@ -21,7 +21,7 @@ const db = new Database(dbPath);
 
 // --- MIGRATIONS ---
 const migrations = [
-    // Version 1: The initial setup. (Full, correct SQL)
+    // Version 1: The initial setup.
     {
         version: 1,
         up: `
@@ -50,7 +50,7 @@ const migrations = [
             ALTER TABLE linked_channels_v2 RENAME TO linked_channels;
         `
     },
-    // Version 3: Replaces delete settings with clearer forward/reverse toggles.
+    // Version 3: Replaced delete settings with clearer forward/reverse toggles.
     {
         version: 3,
         up: `
@@ -70,6 +70,13 @@ const migrations = [
             DROP TABLE linked_channels;
             ALTER TABLE linked_channels_v3 RENAME TO linked_channels;
         `
+    },
+    // [FIX] Version 4: Re-adds the delete_delay_hours column that was mistakenly removed in the v3 schema.
+    {
+        version: 4,
+        up: `
+            ALTER TABLE linked_channels ADD COLUMN delete_delay_hours INTEGER DEFAULT 0 NOT NULL;
+        `
     }
 ];
 
@@ -87,7 +94,7 @@ if (currentVersion < latestVersion) {
         const latestSchema = `
             PRAGMA foreign_keys = ON;
             CREATE TABLE relay_groups (group_id INTEGER PRIMARY KEY AUTOINCREMENT, group_name TEXT NOT NULL UNIQUE, owner_guild_id TEXT NOT NULL);
-            CREATE TABLE linked_channels (channel_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, webhook_url TEXT NOT NULL, direction TEXT DEFAULT 'BOTH' NOT NULL, allow_forward_delete BOOLEAN DEFAULT 1 NOT NULL, allow_reverse_delete BOOLEAN DEFAULT 0 NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE);
+            CREATE TABLE linked_channels (channel_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, webhook_url TEXT NOT NULL, direction TEXT DEFAULT 'BOTH' NOT NULL, allow_forward_delete BOOLEAN DEFAULT 1 NOT NULL, allow_reverse_delete BOOLEAN DEFAULT 0 NOT NULL, delete_delay_hours INTEGER DEFAULT 0 NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE);
             CREATE TABLE role_mappings (mapping_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, guild_id TEXT NOT NULL, role_name TEXT NOT NULL, role_id TEXT NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, guild_id, role_name));
             CREATE TABLE relayed_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, original_message_id TEXT NOT NULL, original_channel_id TEXT NOT NULL, relayed_message_id TEXT NOT NULL, relayed_channel_id TEXT NOT NULL, webhook_url TEXT NOT NULL);
         `;
