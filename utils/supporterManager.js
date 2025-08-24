@@ -1,58 +1,59 @@
 // utils/supporterManager.js
-const https = require('https'); // Use the built-in Node.js module for HTTPS requests
+const https = require('https');
 
-// The raw URL to your supporters.txt file on GitHub Gist or your webserver.
-// IMPORTANT: Replace this with your actual URL.
-const SUPPORTER_LIST_URL = 'https://shaggyze.website/supporters.txt';
+// [NEW] Add URLs for both files.
+const PATRON_LIST_URL = 'https://your-domain.com/path/to/patrons.txt'; // Replace with your URL
+const VOTER_LIST_URL = 'https://your-domain.com/path/to/voters.txt';   // Replace with your URL
 
-// We will store the supporter IDs in a Set for very fast lookups.
 let supporterIds = new Set();
 
-// Function to fetch the list and update our cache using the native https module.
-function fetchSupporterIds() {
-    // We wrap the logic in a Promise to handle the asynchronous nature cleanly.
-    return new Promise((resolve) => {
-        if (!SUPPORTER_LIST_URL.startsWith('http')) {
-            console.log('[Supporters] Supporter list URL is not configured. Skipping fetch.');
-            return resolve();
+// Helper function to fetch a single file.
+function fetchFile(url) {
+    return new Promise((resolve, reject) => {
+        if (!url.startsWith('http')) {
+            return resolve(''); // Resolve with empty string if URL is not set
         }
-
-        console.log('[Supporters] Fetching updated supporter list using native https...');
-        
-        https.get(SUPPORTER_LIST_URL, (response) => {
-            // Check if the request was successful
+        https.get(url, (response) => {
             if (response.statusCode !== 200) {
-                console.error(`[Supporters] Failed to fetch supporter list. Status: ${response.statusCode}`);
-                return resolve();
+                console.error(`Failed to fetch file from ${url}. Status: ${response.statusCode}`);
+                return resolve('');
             }
-
             let rawData = '';
-            // A chunk of data has been received.
-            response.on('data', (chunk) => {
-                rawData += chunk;
-            });
-
-            // The whole response has been received. Process the result.
-            response.on('end', () => {
-                try {
-                    const ids = rawData.split(/\s+/).filter(id => id.length > 0);
-                    supporterIds = new Set(ids);
-                    console.log(`[Supporters] Successfully loaded ${supporterIds.size} supporter IDs into the cache.`);
-                } catch (e) {
-                    console.error('[Supporters] An error occurred while parsing the supporter list:', e);
-                } finally {
-                    resolve();
-                }
-            });
-
+            response.on('data', (chunk) => { rawData += chunk; });
+            response.on('end', () => resolve(rawData));
         }).on('error', (error) => {
-            console.error('[Supporters] An error occurred while fetching the supporter list:', error);
-            resolve();
+            console.error(`Error fetching file from ${url}:`, error);
+            resolve(''); // Resolve with empty string on error
         });
     });
 }
 
-// Function to check if a user is a supporter (this function remains the same).
+// Main function to fetch both lists and combine them.
+async function fetchSupporterIds() {
+    console.log('[Supporters] Fetching updated patron and voter lists...');
+    
+    // Fetch both files in parallel for speed.
+    const [patronData, voterData] = await Promise.all([
+        fetchFile(PATRON_LIST_URL),
+        fetchFile(VOTER_LIST_URL)
+    ]);
+
+    const combinedIds = new Set();
+
+    // Process patrons (one ID per line)
+    patronData.split(/\s+/).filter(id => id.length > 0).forEach(id => combinedIds.add(id));
+    const patronCount = combinedIds.size;
+
+    // Process voters (id,timestamp per line)
+    voterData.split(/\s+/).filter(line => line.length > 0).forEach(line => {
+        const userId = line.split(',')[0];
+        if (userId) combinedIds.add(userId);
+    });
+    
+    supporterIds = combinedIds;
+    console.log(`[Supporters] Successfully loaded ${patronCount} patrons and ${supporterIds.size - patronCount} active voters. Total: ${supporterIds.size}`);
+}
+
 function isSupporter(userId) {
     return supporterIds.has(userId);
 }
