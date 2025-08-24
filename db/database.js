@@ -21,7 +21,7 @@ const db = new Database(dbPath);
 
 // --- MIGRATIONS ---
 const migrations = [
-    // Version 1: The initial setup. (This is now a complete, non-placeholder schema)
+    // Version 1: The initial setup. (Full, correct SQL)
     {
         version: 1,
         up: `
@@ -60,8 +60,8 @@ const migrations = [
                 group_id INTEGER NOT NULL,
                 webhook_url TEXT NOT NULL,
                 direction TEXT DEFAULT 'BOTH' NOT NULL,
-                allow_forward_delete BOOLEAN DEFAULT 1 NOT NULL, -- On by default
-                allow_reverse_delete BOOLEAN DEFAULT 0 NOT NULL, -- Off by default
+                allow_forward_delete BOOLEAN DEFAULT 1 NOT NULL,
+                allow_reverse_delete BOOLEAN DEFAULT 0 NOT NULL,
                 FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE
             );
             INSERT INTO linked_channels_v3 (channel_id, guild_id, group_id, webhook_url, direction)
@@ -91,9 +91,14 @@ if (currentVersion < latestVersion) {
             CREATE TABLE role_mappings (mapping_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, guild_id TEXT NOT NULL, role_name TEXT NOT NULL, role_id TEXT NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, guild_id, role_name));
             CREATE TABLE relayed_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, original_message_id TEXT NOT NULL, original_channel_id TEXT NOT NULL, relayed_message_id TEXT NOT NULL, relayed_channel_id TEXT NOT NULL, webhook_url TEXT NOT NULL);
         `;
-        db.exec(latestSchema);
-        db.pragma(`user_version = ${latestVersion}`);
-        console.log(`[DB] Successfully set up new database at version ${latestVersion}.`);
+        try {
+            db.exec(latestSchema);
+            db.pragma(`user_version = ${latestVersion}`);
+            console.log(`[DB] Successfully set up new database at version ${latestVersion}.`);
+        } catch (error) {
+            console.error(`[DB] FAILED to set up new database.`, error);
+            process.exit(1);
+        }
     } else {
         // For existing databases, apply migrations one by one.
         for (const migration of migrations) {
