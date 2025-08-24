@@ -9,14 +9,15 @@ module.exports = {
     async execute(message) {
         if (message.author.bot || !message.guild) return;
 
-        // [NEW] Add a guard to ignore truly empty messages (e.g., sticker-only messages)
         if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) {
-            console.log(`[DEBUG] Message ${message.id} from ${message.author.tag} was ignored because it is effectively empty.`);
             return;
         }
 
-        const sourceChannelInfo = db.prepare('SELECT * FROM linked_channels WHERE channel_id = ?').get(message.channel.id);
-        if (!sourceChannelInfo) return; // Not a relay channel, ignore silently.
+        // The source channel must be able to send messages.
+        const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
+        if (!sourceChannelInfo) {
+            return; // Ignore if the channel is not linked or is "Receive Only".
+        }
 
         const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
         if (!groupInfo) {
@@ -27,9 +28,13 @@ module.exports = {
 
         console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
 
-        const targetChannels = db.prepare('SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ?').all(sourceChannelInfo.group_id, message.channel.id);
+        // The query for target channels must now check THEIR direction.
+        const targetChannels = db.prepare(
+            `SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`
+        ).all(sourceChannelInfo.group_id, message.channel.id);
+
         if (targetChannels.length === 0) {
-            console.log(`[DEBUG] No other target channels found in group "${groupInfo.group_name}" (ID: ${sourceChannelInfo.group_id}). Nothing to relay.`);
+            console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
             return;
         }
         
@@ -86,7 +91,7 @@ module.exports = {
                 }
 
                 const relayedMessage = await webhookClient.send({
-                    content: targetContent, // No longer need the `|| ' '` fallback because of our new guard clause.
+                    content: targetContent,
                     username: username,
                     avatarURL: avatarURL,
                     files: message.attachments.map(att => att.url),

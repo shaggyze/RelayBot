@@ -13,9 +13,19 @@ module.exports = {
             if (!link) return;
 
             const sourceChannelSettings = db.prepare('SELECT reverse_delete_enabled FROM linked_channels WHERE channel_id = ?').get(link.original_channel_id);
-            if (!sourceChannelSettings || !sourceChannelSettings.reverse_delete_enabled) return;
+            
+            // [DIAGNOSTIC LOGGING]
+            // Let's see what the bot thinks the setting is.
+            const isEnabled = sourceChannelSettings ? sourceChannelSettings.reverse_delete_enabled : 'N/A';
+            console.log(`[REVERSE-DELETE] Check triggered for original channel ${link.original_channel_id}. Setting is: ${isEnabled}`);
 
-            console.log(`[REVERSE-DELETE] Relayed message ${message.id} deleted. Attempting to delete original message ${link.original_message_id}.`);
+            // This is the check that seems to be failing.
+            if (!sourceChannelSettings || !sourceChannelSettings.reverse_delete_enabled) {
+                console.log('[REVERSE-DELETE] Condition met. Reverse delete is disabled. No action taken.');
+                return; 
+            }
+
+            console.log(`[REVERSE-DELETE] Condition NOT met. Proceeding to delete original message ${link.original_message_id}.`);
             try {
                 const originalChannel = await message.client.channels.fetch(link.original_channel_id);
                 const originalMessage = await originalChannel.messages.fetch(link.original_message_id);
@@ -41,8 +51,6 @@ module.exports = {
                     const channelName = message.client.channels.cache.get(relayed.relayed_channel_id)?.name ?? relayed.relayed_channel_id;
                     console.error(`[AUTO-CLEANUP] Webhook for channel #${channelName} (${relayed.relayed_channel_id}) is invalid during delete. Removing from the relay group.`);
                     db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(relayed.relayed_channel_id);
-                } else {
-                    // Ignore other errors, as the message may have already been deleted by another process.
                 }
             }
         }
