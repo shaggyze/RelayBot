@@ -207,7 +207,7 @@ module.exports = {
                 db.prepare('UPDATE linked_channels SET delete_delay_hours = ? WHERE channel_id = ?').run(hours, channelId);
                 await interaction.reply({ content: `✅ Auto-delete delay for this channel set to **${hours} hours**.`, ephemeral: true });
             
-            else if (subcommand === 'toggle_forward_delete') {
+            } else if (subcommand === 'toggle_forward_delete') {
                 const channelLink = db.prepare('SELECT allow_forward_delete FROM linked_channels WHERE channel_id = ?').get(channelId);
                 if (!channelLink) return interaction.reply({ content: 'This channel is not a linked relay channel.', ephemeral: true });
 
@@ -217,7 +217,7 @@ module.exports = {
                 const status = newValue ? 'ENABLED' : 'DISABLED';
                 await interaction.reply({ content: `✅ Forward deletion for this channel is now **${status}**. When a message is deleted here, its relayed copies will also be deleted.`, ephemeral: true });
 
-            else if (subcommand === 'toggle_reverse_delete') {
+            } else if (subcommand === 'toggle_reverse_delete') {
                 const channelLink = db.prepare('SELECT allow_reverse_delete FROM linked_channels WHERE channel_id = ?').get(channelId);
                 if (!channelLink) return interaction.reply({ content: 'This channel is not a linked relay channel.', ephemeral: true });
 
