@@ -34,7 +34,8 @@ There are two ways to use RelayBot: inviting an official public bot (if availabl
 ### Self-Hosting (Recommended)
 
 The easiest way to host your own bot is with Railway. The button below will guide you through setting up your own private instance.
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https%3A%2F%2Fgithub.com%2Fshaggyze%2FRelayBot&envs=DISCORD_TOKEN,CLIENT_ID&DISCORD_TOKENDesc=Your+Discord+bot+token.&CLIENT_IDDesc=Your+bot's+application+ID.)
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/HbhYGF?referralCode=hmJrvY)
 
 For manual installation instructions and troubleshooting, please see the sections at the bottom of this guide.
 
