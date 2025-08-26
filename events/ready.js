@@ -3,20 +3,17 @@ const { Events, ActivityType, WebhookClient, ChannelType } = require('discord.js
 const db = require('../db/database.js');
 const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
-const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js'); // [NEW] Import the supporter manager
+const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
 module.exports = {
     name: Events.ClientReady,
     once: true,
-    async execute(client) { // Make the function async
+    async execute(client) {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
 
-        // --- [NEW] Supporter Cache Initialization and Refresh Timer ---
-        // Fetch the list for the first time on startup.
+        // --- Supporter Cache Initialization and Refresh Timer ---
         await fetchSupporterIds();
-        
-        // Set a timer to re-fetch the list every hour.
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
 
@@ -40,44 +37,55 @@ module.exports = {
 
         // --- Task 2: Daily Vote Reminder (runs every 24 hours) ---
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
-        setInterval(async () => { // Make this function async as well
-            console.log('[Tasks] Sending daily vote reminder...');
+        setInterval(async () => {
+            console.log('[Tasks] Starting daily vote reminder task...');
 
             const votePayload = createVoteMessage();
             votePayload.username = 'RelayBot';
             votePayload.avatarURL = client.user.displayAvatarURL();
             
             const allLinkedChannels = db.prepare('SELECT channel_id, webhook_url FROM linked_channels').all();
-            if (allLinkedChannels.length === 0) return;
+            if (allLinkedChannels.length === 0) {
+                console.log('[Tasks] No linked channels found. Vote reminder task finished.');
+                return;
+            }
 
             console.log(`[Tasks] Checking ${allLinkedChannels.length} channel(s) for reminders.`);
 
             for (const channelInfo of allLinkedChannels) {
                 try {
                     const channel = await client.channels.fetch(channelInfo.channel_id);
-                    // Ensure it's a channel where we can get members (i.e., not a DM or deleted channel)
-                    if (!channel || channel.type === ChannelType.DM || !channel.members) continue;
-
-                    // Fetch all members in the channel
-                    const members = channel.members;
-                    if (members.size === 0) continue; // Skip empty channels
-
-                    // [NEW LOGIC] Check if every member in the channel is a supporter
-                    const allMembersAreSupporters = members.every(member => isSupporter(member.id));
-
-                    if (allMembersAreSupporters) {
-                        console.log(`[Tasks] Skipping channel #${channel.name} because all members are supporters.`);
-                        continue; // Skip this channel
+                    if (!channel || channel.type === ChannelType.DM || !channel.members) {
+                        console.log(`[Tasks] [DEBUG] Skipping channel ${channelInfo.channel_id} (cannot fetch members).`);
+                        continue;
                     }
 
-                    // If we reach here, at least one person is not a supporter, so send the message.
+                    // [CORRECT LOGIC] Check if AT LEAST ONE member is a supporter.
+                    const hasSupporter = channel.members.some(member => !member.user.bot && isSupporter(member.id));
+
+                    // --- DIAGNOSTIC LOGGING ---
+                    console.log(`[Tasks] [DIAGNOSTIC] Checking channel #${channel.name}: Found ${channel.members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+
+                    if (hasSupporter) {
+                        // If even one supporter is found, the whole channel is rewarded. Skip it.
+                        console.log(`[Tasks] [SKIP] Skipping channel #${channel.name} because at least one member is a supporter.`);
+                        continue;
+                    }
+
+                    // If we reach here, no supporters were found. Send the generic message.
+                    console.log(`[Tasks] [SEND] Sending reminder to channel #${channel.name}.`);
+                    
                     const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
-                    await webhookClient.send(votePayload).catch(() => {});
+                    // Send the payload with NO PINGS.
+                    await webhookClient.send(votePayload).catch((err) => {
+                        console.error(`[Tasks] [FAIL] FAILED to send reminder to webhook in #${channel.name}: ${err.message}`);
+                    });
                     
                 } catch (error) {
-                    // Ignore errors for channels we can't fetch or process
+                    console.error(`[Tasks] [FAIL] An error occurred while processing channel ${channelInfo.channel_id}:`, error);
                 }
             }
+            console.log('[Tasks] Vote reminder task finished.');
         }, twentyFourHoursInMs);
     },
 };
