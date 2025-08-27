@@ -6,7 +6,7 @@ function createVoteMessage() {
     const voteEmbed = new EmbedBuilder()
         .setColor('#5865F2')
         .setTitle('Enjoying RelayBot?')
-        .setDescription('Your support helps the bot grow and stay active. Please consider voting for us on Top.gg and checking out the developer\'s Patreon!')
+        .setDescription('Your support helps the bot grow and stay active. Please consider voting for us on Top.gg once every 24 hr or becoming a patron on the developer\'s Patreon to remove this message.')
         .setTimestamp();
 
     const actionRow = new ActionRowBuilder()

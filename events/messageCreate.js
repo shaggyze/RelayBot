@@ -91,7 +91,8 @@ module.exports = {
                 }
 
                 const relayedMessage = await webhookClient.send({
-                    content: targetContent,
+                    // [CRITICAL FIX] Restore the fallback to prevent empty message errors.
+                    content: targetContent || ' ',
                     username: username,
                     avatarURL: avatarURL,
                     files: message.attachments.map(att => att.url),
