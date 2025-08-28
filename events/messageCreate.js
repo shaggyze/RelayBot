@@ -9,14 +9,15 @@ module.exports = {
     async execute(message) {
         if (message.author.bot || !message.guild) return;
 
+        // Initial check for obviously empty messages (e.g., sticker-only messages)
         if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) {
             return;
         }
 
-        // The source channel must be able to send messages.
+        // The source channel must be configured to send messages.
         const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
         if (!sourceChannelInfo) {
-            return; // Ignore if the channel is not linked or is "Receive Only".
+            return; // Ignore if the channel is not linked or is set to "Receive Only".
         }
 
         const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
@@ -28,7 +29,7 @@ module.exports = {
 
         console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
 
-        // The query for target channels must now check THEIR direction.
+        // The target channels must be configured to receive messages.
         const targetChannels = db.prepare(
             `SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`
         ).all(sourceChannelInfo.group_id, message.channel.id);
@@ -84,6 +85,19 @@ module.exports = {
                     }
                 }
                 
+                // [CRITICAL FIX] Add an invisible character if the message *only* contains mentions.
+                // This forces Discord to render the message even if all mentions are invalid on the target server.
+                const contentWithoutMentions = targetContent.replace(/<@!?&?(\d+)>/g, '').trim();
+                if (contentWithoutMentions.length === 0 && (targetContent.includes('<@') || targetContent.includes('<#'))) {
+                    targetContent += '\u200B'; // Append a zero-width space
+                }
+
+                // Final check to prevent truly empty messages
+                if (!targetContent.trim() && message.attachments.size === 0 && message.embeds.length === 0) {
+                    console.log(`[RELAY] SKIPPED sending to #${targetChannelName} because the final message was empty.`);
+                    continue; 
+                }
+
                 let webhookClient = webhookCache.get(target.webhook_url);
                 if (!webhookClient) {
                     webhookClient = new WebhookClient({ url: target.webhook_url });
@@ -91,8 +105,7 @@ module.exports = {
                 }
 
                 const relayedMessage = await webhookClient.send({
-                    // [CRITICAL FIX] Restore the fallback to prevent empty message errors.
-                    content: targetContent || ' ',
+                    content: targetContent,
                     username: username,
                     avatarURL: avatarURL,
                     files: message.attachments.map(att => att.url),

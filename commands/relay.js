@@ -158,15 +158,34 @@ module.exports = {
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
                 if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists.`, ephemeral: true });
 
-                const linkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
-                if (linkedGuilds.length === 0) return interaction.reply({ content: `There are no servers currently linked to group "**${groupName}**".`, ephemeral: true });
+                const allLinks = db.prepare('SELECT guild_id, channel_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
+                if (allLinks.length === 0) return interaction.reply({ content: `There are no channels currently linked to group "**${groupName}**".`, ephemeral: true });
                 
-                const serverList = linkedGuilds.map(row => {
-                    const guild = interaction.client.guilds.cache.get(row.guild_id);
-                    return `• **${guild ? guild.name : 'Unknown Server'}** (ID: \`${row.guild_id}\`)`;
-                }).join('\n');
+                // Group channels by their guild ID
+                const guildsToChannels = new Map();
+                for (const link of allLinks) {
+                    if (!guildsToChannels.has(link.guild_id)) {
+                        guildsToChannels.set(link.guild_id, []);
+                    }
+                    guildsToChannels.get(link.guild_id).push(link.channel_id);
+                }
 
-                const listEmbed = new EmbedBuilder().setTitle(`Servers in Group "${groupName}"`).setColor('#5865F2').setDescription(serverList);
+                // Build the description string
+                let description = '';
+                for (const [guildId, channelIds] of guildsToChannels.entries()) {
+                    const guild = interaction.client.guilds.cache.get(guildId);
+                    description += `• **${guild ? guild.name : 'Unknown Server'}** (ID: \`${guildId}\`)\n`;
+                    
+                    for (const cid of channelIds) {
+                        description += `  └─ <#${cid}> (ID: \`${cid}\`)\n`;
+                    }
+                }
+
+                const listEmbed = new EmbedBuilder()
+                    .setTitle(`Servers & Channels in Group "${groupName}"`)
+                    .setColor('#5865F2')
+                    .setDescription(description.trim());
+                
                 await interaction.reply({ embeds: [listEmbed], ephemeral: true });
 
             } else if (subcommand === 'map_role') {
