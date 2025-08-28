@@ -5,15 +5,13 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
-// This function contains the logic for the task we want to run.
 async function runDailyVoteReminder(client) {
-    console.log('[Tasks] It is noon! Starting daily vote reminder task...');
-    await fetchSupporterIds(); // Always get the freshest data
-
+    console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
+    await fetchSupporterIds();
     const votePayload = createVoteMessage();
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
-    
+
     const allLinkedChannels = db.prepare('SELECT channel_id, webhook_url FROM linked_channels').all();
     if (allLinkedChannels.length === 0) {
         console.log('[Tasks] No linked channels found. Vote reminder task finished.');
@@ -48,28 +46,29 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
-// This is the self-correcting scheduler function.
 function scheduleNextNoonTask(client) {
     const now = new Date();
-    const nextNoon = new Date();
-    nextNoon.setHours(12, 0, 0, 0);
+    const nextRun = new Date();
+    
+    // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
+    const targetUtcHour = 19;
+    nextRun.setUTCHours(targetUtcHour, 12, 0, 0);
 
-    if (now > nextNoon) {
-        nextNoon.setDate(now.getDate() + 1);
+    if (now > nextRun) {
+        // If it's already past 19:00 UTC today, schedule for 19:00 UTC tomorrow.
+        nextRun.setUTCDate(nextRun.getUTCDate() + 1);
     }
 
-    const delay = nextNoon.getTime() - now.getTime();
+    const delay = nextRun.getTime() - now.getTime();
     
-    console.log(`[Scheduler] Next daily vote reminder scheduled for: ${nextNoon.toLocaleString()}`);
+    console.log(`[Scheduler] Next daily vote reminder scheduled for: ${nextRun.toUTCString()}`);
     console.log(`[Scheduler] Will run in ${(delay / 1000 / 60 / 60).toFixed(2)} hours.`);
 
     setTimeout(() => {
-        runVoteReminder(client);
-        // After running, immediately schedule the *next* noon's task.
-        scheduleNextNoonTask(client);
+        runDailyVoteReminder(client);
+        scheduleNextNoonTask(client); // Reschedule for the next day after running.
     }, delay);
 }
-
 
 module.exports = {
     name: Events.ClientReady,
@@ -77,13 +76,11 @@ module.exports = {
     async execute(client) {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
-
-        // --- Supporter Cache Initialization and Refresh Timer ---
+        
         await fetchSupporterIds();
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
-
-        // --- Task 1: Message Cleanup (runs every 15 minutes) ---
+        
         setInterval(() => {
             console.log('[Tasks] Running scheduled message cleanup...');
             const channelsToClean = db.prepare('SELECT channel_id, delete_delay_hours FROM linked_channels WHERE delete_delay_hours > 0').all();
@@ -100,9 +97,7 @@ module.exports = {
                 }).catch(() => {});
             }
         }, 15 * 60 * 1000);
-
-        // --- Task 2: Daily Noon Vote Reminder ---
-        // Start the scheduling loop.
+        
         scheduleNextNoonTask(client);
     },
 };
