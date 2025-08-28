@@ -5,9 +5,11 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
+// This function contains the logic for the task we want to run.
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
-    await fetchSupporterIds();
+    await fetchSupporterIds(); // Always get the freshest data
+
     const votePayload = createVoteMessage();
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
@@ -25,14 +27,24 @@ async function runDailyVoteReminder(client) {
             const channel = await client.channels.fetch(channelInfo.channel_id);
             if (!channel || !channel.members) continue;
 
+            // [CORRECT LOGIC] Check if AT LEAST ONE member is a supporter.
             const hasSupporter = channel.members.some(member => !member.user.bot && isSupporter(member.id));
+
+            // [CORRECT LOGGING] The essential diagnostic line.
+            console.log(`[Tasks] [DIAGNOSTIC] Checking channel #${channel.name}: Found ${channel.members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+
             if (hasSupporter) {
-                console.log(`[Tasks] [SKIP] Skipping channel #${channel.name} because a supporter is present.`);
+                // If even one supporter is found, the whole channel is rewarded. Skip it.
+                console.log(`[Tasks] [SKIP] Skipping channel #${channel.name} because at least one member is a supporter.`);
                 continue;
             }
 
+            // If we reach here, no supporters were found. Send the generic message.
+            console.log(`[Tasks] [SEND] Sending reminder to channel #${channel.name}.`);
+            
             const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
             await webhookClient.send(votePayload);
+
         } catch (error) {
             const channelName = client.channels.cache.get(channelInfo.channel_id)?.name ?? channelInfo.channel_id;
             if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
@@ -46,16 +58,19 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
+// This is the simple, self-correcting scheduler function.
 function scheduleNextNoonTask(client) {
     const now = new Date();
     const nextRun = new Date();
     
     // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
+    // We set it to 12:12 PM PDT, which is 19:12 UTC.
     const targetUtcHour = 19;
-    nextRun.setUTCHours(targetUtcHour, 12, 0, 0);
+    const targetUtcMinute = 0;
+    nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
 
     if (now > nextRun) {
-        // If it's already past 19:00 UTC today, schedule for 19:00 UTC tomorrow.
+        // If it's already past the target time today in UTC, schedule for the next day.
         nextRun.setUTCDate(nextRun.getUTCDate() + 1);
     }
 
@@ -69,6 +84,7 @@ function scheduleNextNoonTask(client) {
         scheduleNextNoonTask(client); // Reschedule for the next day after running.
     }, delay);
 }
+
 
 module.exports = {
     name: Events.ClientReady,
