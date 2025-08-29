@@ -1,5 +1,5 @@
 // events/messageCreate.js
-const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quote, StickerType } = require('discord.js');
+const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quote } = require('discord.js');
 const db = require('../db/database.js');
 
 const webhookCache = new Collection();
@@ -25,9 +25,15 @@ module.exports = {
 
         console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
 
-        const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
-        if (targetChannels.length === 0) return;
+        const targetChannels = db.prepare(
+            `SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`
+        ).all(sourceChannelInfo.group_id, message.channel.id);
 
+        if (targetChannels.length === 0) {
+            console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
+            return;
+        }
+        
         console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
 
         const senderName = message.member?.displayName ?? message.author.username;
@@ -49,25 +55,41 @@ module.exports = {
             const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
             console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
             
-            try {
-                let targetContent = message.content;
-                const roleMentions = targetContent.match(/<@&(\d+)>/g);
+            let targetContent = message.content;
+            
+            const roleMentions = targetContent.match(/<@&(\d+)>/g);
+            if (roleMentions) {
+                console.log(`[ROLES] Found ${roleMentions.length} role mention(s). Processing for target guild ${target.guild_id}.`);
+                for (const mention of roleMentions) {
+                    const sourceRoleId = mention.match(/\d+/)[0];
+                    const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
+                    if (!roleMap) {
+                        console.log(`[ROLES] Role ID ${sourceRoleId} has no mapping in this group. Skipping.`);
+                        continue;
+                    }
 
-                if (roleMentions) {
-                    // Role mapping logic does not change.
-                    // It correctly replaces mapped roles and leaves unmapped roles untouched.
-                    for (const mention of roleMentions) {
-                        const sourceRoleId = mention.match(/\d+/)[0];
-                        const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
-                        if (!roleMap) continue;
-
-                        let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
-                        if (targetRole) {
-                            targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
+                    let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
+                    
+                    if (!targetRole) {
+                        try {
+                            const targetGuild = await message.client.guilds.fetch(target.guild_id);
+                            if (targetGuild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                                const newRole = await targetGuild.roles.create({ name: roleMap.role_name, mentionable: true, reason: `Auto-created for message relay.` });
+                                db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(target.group_id, target.guild_id, roleMap.role_name, newRole.id);
+                                targetRole = { role_id: newRole.id };
+                            }
+                        } catch (creationError) {
+                            console.error(`[ROLES] FAILED to auto-create role "${roleMap.role_name}":`, creationError);
                         }
+                    }
+                    
+                    if (targetRole) {
+                        console.log(`[ROLES] Mapping "${roleMap.role_name}" from ${sourceRoleId} to ${targetRole.role_id}.`);
+                        targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
                     }
                 }
             }
+            
             let finalContent = replyContent + targetContent;
 
             const payload = {
@@ -84,7 +106,6 @@ module.exports = {
             }
 
             try {
-                // --- OPTIMISTIC FIRST ATTEMPT ---
                 const webhookClient = new WebhookClient({ url: target.webhook_url });
                 const relayedMessage = await webhookClient.send(payload);
 
@@ -94,16 +115,12 @@ module.exports = {
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
             } catch (error) {
-                // --- INTELLIGENT CATCH BLOCK ---
                 if (error.code === 50006 && message.stickers.size > 0) {
-                    // This error means the sticker was likely invalid for the webhook.
                     console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
                     
-                    // --- GUARANTEED FALLBACK ATTEMPT ---
                     try {
                         const sticker = message.stickers.first();
                         const fallbackPayload = payload;
-                        // Remove the sticker and add text instead.
                         delete fallbackPayload.stickers;
                         fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
 
