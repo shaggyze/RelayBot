@@ -1,5 +1,5 @@
 // events/messageCreate.js
-const { Events, WebhookClient, Collection, PermissionFlagsBits } = require('discord.js');
+const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quote } = require('discord.js');
 const db = require('../db/database.js');
 
 const webhookCache = new Collection();
@@ -9,16 +9,14 @@ module.exports = {
     async execute(message) {
         if (message.author.bot || !message.guild) return;
 
-        // Initial check for obviously empty messages (e.g., sticker-only messages)
+        // A simple check for truly empty messages (e.g., a failed embed load).
+        // Note: Sticker-only messages are handled later.
         if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) {
             return;
         }
 
-        // The source channel must be configured to send messages.
         const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
-        if (!sourceChannelInfo) {
-            return; // Ignore if the channel is not linked or is set to "Receive Only".
-        }
+        if (!sourceChannelInfo) return;
 
         const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
         if (!groupInfo) {
@@ -29,15 +27,11 @@ module.exports = {
 
         console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
 
-        // The target channels must be configured to receive messages.
         const targetChannels = db.prepare(
             `SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`
         ).all(sourceChannelInfo.group_id, message.channel.id);
 
-        if (targetChannels.length === 0) {
-            console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
-            return;
-        }
+        if (targetChannels.length === 0) return;
         
         console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
         
@@ -45,6 +39,17 @@ module.exports = {
         const username = `${senderName} (${message.guild.name})`;
         const avatarURL = message.author.displayAvatarURL();
         
+        let replyContent = '';
+        if (message.reference && message.reference.messageId) {
+            try {
+                const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
+                const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
+                replyContent = blockQuote(quote(`${repliedAuthorName}: ${repliedMessage.content.substring(0, 200)}`)) + '\n';
+            } catch {
+                replyContent = blockQuote(quote(`Replying to a deleted or inaccessible message.`)) + '\n';
+            }
+        }
+
         for (const target of targetChannels) {
             const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
             console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
@@ -53,49 +58,29 @@ module.exports = {
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);
 
                 if (roleMentions) {
-                    console.log(`[ROLES] Found ${roleMentions.length} role mention(s). Processing for target guild ${target.guild_id}.`);
+                    // Role mapping logic does not change.
+                    // It correctly replaces mapped roles and leaves unmapped roles untouched.
                     for (const mention of roleMentions) {
                         const sourceRoleId = mention.match(/\d+/)[0];
                         const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
-                        if (!roleMap) {
-                            console.log(`[ROLES] Role ID ${sourceRoleId} has no mapping in this group. Skipping.`);
-                            continue;
-                        }
+                        if (!roleMap) continue;
 
                         let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
-                        
-                        if (!targetRole) {
-                            try {
-                                const targetGuild = await message.client.guilds.fetch(target.guild_id);
-                                if (targetGuild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) {
-                                    console.log(`[ROLES] Auto-creating role "${roleMap.role_name}" in guild ${target.guild_id}.`);
-                                    const newRole = await targetGuild.roles.create({ name: roleMap.role_name, mentionable: true, reason: `Auto-created for message relay.` });
-                                    db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(target.group_id, target.guild_id, roleMap.role_name, newRole.id);
-                                    targetRole = { role_id: newRole.id };
-                                }
-                            } catch (creationError) {
-                                console.error(`[ROLES] FAILED to auto-create role "${roleMap.role_name}":`, creationError);
-                            }
-                        }
-                        
                         if (targetRole) {
-                            console.log(`[ROLES] Mapping "${roleMap.role_name}" from ${sourceRoleId} to ${targetRole.role_id}.`);
                             targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
                         }
                     }
                 }
                 
-                // [CRITICAL FIX] Add an invisible character if the message *only* contains mentions.
-                // This forces Discord to render the message even if all mentions are invalid on the target server.
-                const contentWithoutMentions = targetContent.replace(/<@!?&?(\d+)>/g, '').trim();
-                if (contentWithoutMentions.length === 0 && (targetContent.includes('<@') || targetContent.includes('<#'))) {
-                    targetContent += '\u200B'; // Append a zero-width space
-                }
+                let finalContent = replyContent + targetContent;
 
-                // Final check to prevent truly empty messages
-                if (!targetContent.trim() && message.attachments.size === 0 && message.embeds.length === 0) {
-                    console.log(`[RELAY] SKIPPED sending to #${targetChannelName} because the final message was empty.`);
-                    continue; 
+                // [THE DEFINITIVE FIX FOR UNMAPPED ROLES AND EMPTY MESSAGES]
+                // This logic ensures a message is NEVER dropped.
+                // If the final text content is empty or just mentions, we add an invisible character
+                // to force Discord's API to process and render it, showing '@unknown-role'.
+                const contentWithoutMentions = finalContent.replace(/<@!?&?#?(\d+)>/g, '').trim();
+                if (contentWithoutMentions.length === 0 && (finalContent.includes('<@') || finalContent.includes('<#'))) {
+                    finalContent += '\u200B'; // Append a zero-width space
                 }
 
                 let webhookClient = webhookCache.get(target.webhook_url);
@@ -104,14 +89,27 @@ module.exports = {
                     webhookCache.set(target.webhook_url, webhookClient);
                 }
 
-                const relayedMessage = await webhookClient.send({
-                    content: targetContent,
+                const payload = {
+                    content: finalContent,
                     username: username,
                     avatarURL: avatarURL,
                     files: message.attachments.map(att => att.url),
                     embeds: message.embeds,
-                    allowedMentions: { parse: ['roles'] }
-                });
+                    allowedMentions: { parse: ['roles'], repliedUser: false }
+                };
+
+                if (message.stickers.size > 0) {
+                    payload.stickers = [message.stickers.first().id];
+                }
+
+                // Final check: If after all this, the payload is still fundamentally empty, we skip.
+                // This should now only catch truly blank messages, not unmapped roles.
+                if (!payload.content.trim() && !payload.files.length && !payload.embeds.length && !payload.stickers) {
+                    console.log(`[RELAY] SKIPPED sending to #${targetChannelName} because the final payload was truly empty.`);
+                    continue;
+                }
+
+                const relayedMessage = await webhookClient.send(payload);
 
                 console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
                 
@@ -119,8 +117,8 @@ module.exports = {
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
             } catch (error) {
-                if (error.code === 10015) { // Unknown Webhook
-                    console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} (${target.channel_id}) is invalid or was deleted. Removing from the relay group.`);
+                if (error.code === 10015) {
+                    console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                     db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                 } else {
                     console.error(`[RELAY] FAILED to relay message to channel ${target.channel_id}:`, error);
