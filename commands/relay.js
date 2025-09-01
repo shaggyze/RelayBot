@@ -1,6 +1,7 @@
 // commands/relay.js
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
+const { isSupporter } = require('../utils/supporterManager.js'); // [NEW] Import the supporter checker
 
 module.exports = {
     data: new SlashCommandBuilder()
