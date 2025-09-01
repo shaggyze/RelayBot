@@ -49,7 +49,7 @@ function triggerCleanup() {
             path: url.pathname,
             method: 'POST',
             headers: {
-                'User-Agent': `RelayBot Webhook /${version}`,
+                'User-Agent': `RelayBot Webhook/${version}`,
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(postData)
             }

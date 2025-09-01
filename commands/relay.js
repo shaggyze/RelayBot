@@ -177,7 +177,19 @@ module.exports = {
                     description += `• **${guild ? guild.name : 'Unknown Server'}** (ID: \`${guildId}\`)\n`;
                     
                     for (const cid of channelIds) {
-                        description += `  └─ <#${cid}> (ID: \`${cid}\`)\n`;
+                        const channel = interaction.client.channels.cache.get(cid);
+                        
+                        // Check if channel exists and we can access its members
+                        if (channel && channel.members) {
+                            const memberCount = channel.members.size;
+                            // Filter out bots before counting supporters
+                            const supporterCount = channel.members.filter(member => !member.user.bot && isSupporter(member.id)).size;
+                            
+                            description += `  └─ <#${cid}> (${memberCount} Members / ${supporterCount} Supporters)\n`;
+                        } else {
+                            // Fallback for deleted or inaccessible channels
+                            description += `  └─ <#${cid}> (ID: \`${cid}\` - Details unavailable)\n`;
+                        }
                     }
                 }
 
