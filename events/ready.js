@@ -5,11 +5,9 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
-// This function contains the logic for the task we want to run.
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
-    await fetchSupporterIds(); // Always get the freshest data
-
+    await fetchSupporterIds();
     const votePayload = createVoteMessage();
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
@@ -25,23 +23,26 @@ async function runDailyVoteReminder(client) {
     for (const channelInfo of allLinkedChannels) {
         try {
             const channel = await client.channels.fetch(channelInfo.channel_id);
-            if (!channel || !channel.members) continue;
+            // We need the guild object to get a reliable member list.
+            if (!channel || !channel.guild) continue;
 
-            // [CORRECT LOGIC] Check if AT LEAST ONE member is a supporter.
-            const hasSupporter = channel.members.some(member => !member.user.bot && isSupporter(member.id));
+            // [THE CRITICAL FIX] Use the guild's member cache, not the channel's.
+            // This is the same logic we used to fix the /relay list_servers command.
+            const guild = channel.guild;
+            const hasSupporter = guild.members.cache.some(member => !member.user.bot && isSupporter(member.id));
 
-            // [CORRECT LOGGING] The essential diagnostic line.
-            console.log(`[Tasks] [DIAGNOSTIC] Checking channel #${channel.name}: Found ${channel.members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+            // Diagnostic logging now uses the guild name for clarity.
+            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Found ${guild.memberCount} members. Does it contain a supporter? -> ${hasSupporter}`);
 
             if (hasSupporter) {
-                // If even one supporter is found, the whole channel is rewarded. Skip it.
-                console.log(`[Tasks] [SKIP] Skipping channel #${channel.name} because at least one member is a supporter.`);
+                console.log(`[Tasks] [SKIP] Skipping channels in "${guild.name}" because at least one member is a supporter.`);
+                // Note: This now skips all channels in a server if one supporter is found.
+                // This is a simplification but is more reliable and less spammy.
                 continue;
             }
 
-            // If we reach here, no supporters were found. Send the generic message.
             console.log(`[Tasks] [SEND] Sending reminder to channel #${channel.name}.`);
-            
+
             const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
             await webhookClient.send(votePayload);
 

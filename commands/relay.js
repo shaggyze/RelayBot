@@ -171,26 +171,25 @@ module.exports = {
                     guildsToChannels.get(link.guild_id).push(link.channel_id);
                 }
 
-                // Build the description string
+                // [NEW LOGIC] Build the description string with accurate server counts.
                 let description = '';
                 for (const [guildId, channelIds] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
-                    description += `• **${guild ? guild.name : 'Unknown Server'}** (ID: \`${guildId}\`)\n`;
                     
-                    for (const cid of channelIds) {
-                        const channel = interaction.client.channels.cache.get(cid);
+                    if (guild) {
+                        // Use the reliable guild.memberCount for total members.
+                        const memberCount = guild.memberCount;
+                        // Filter the guild's member cache for supporters. This is more reliable than the channel cache.
+                        const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
                         
-                        // Check if channel exists and we can access its members
-                        if (channel && channel.members) {
-                            const memberCount = channel.members.size;
-                            // Filter out bots before counting supporters
-                            const supporterCount = channel.members.filter(member => !member.user.bot && isSupporter(member.id)).size;
-                            
-                            description += `  └─ <#${cid}> (${memberCount} Members / ${supporterCount} Supporters)\n`;
-                        } else {
-                            // Fallback for deleted or inaccessible channels
-                            description += `  └─ <#${cid}> (ID: \`${cid}\` - Details unavailable)\n`;
-                        }
+                        description += `• **${guild.name}** (${memberCount} Members / ${supporterCount} Supporters)\n`;
+                    } else {
+                        description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
+                    }
+                    
+                    // List the channels under the server.
+                    for (const cid of channelIds) {
+                        description += `  └─ <#${cid}>\n`;
                     }
                 }
 
