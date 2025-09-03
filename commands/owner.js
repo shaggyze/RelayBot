@@ -2,7 +2,6 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
 
-// This is your unique Discord User ID.
 const BOT_OWNER_ID = '182938628643749888';
 
 module.exports = {
@@ -12,11 +11,17 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('list_groups')
-                .setDescription('Lists all global relay groups in the database.')),
+                .setDescription('Lists all global relay groups in the database.'))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('delete_group')
+                .setDescription('[DANGER] Forcibly deletes a global group and leaves the owner\'s server.')
+                .addStringOption(option =>
+                    option.setName('name')
+                        .setDescription('The exact name of the group to delete.')
+                        .setRequired(true))),
     
     async execute(interaction) {
-        // --- CRITICAL SECURITY CHECK ---
-        // Immediately stop if the user is not the designated bot owner.
         if (interaction.user.id !== BOT_OWNER_ID) {
             return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         }
@@ -24,7 +29,6 @@ module.exports = {
         const subcommand = interaction.options.getSubcommand();
 
         if (subcommand === 'list_groups') {
-            // Acknowledge the command immediately, as fetching and formatting may take a moment.
             await interaction.deferReply({ ephemeral: true });
 
             const allGroups = db.prepare('SELECT group_name, owner_guild_id FROM relay_groups ORDER BY group_name ASC').all();
@@ -33,7 +37,6 @@ module.exports = {
                 return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
             }
 
-            // Paginate the output in case the list is very long to avoid exceeding Discord's character limit.
             const descriptions = [];
             let currentDescription = '';
 
@@ -42,34 +45,64 @@ module.exports = {
                 const ownerInfo = ownerGuild ? `${ownerGuild.name} (\`${group.owner_guild_id}\`)` : `Unknown Server (\`${group.owner_guild_id}\`)`;
                 const line = `• **${group.group_name}** (Owner: ${ownerInfo})\n`;
                 
-                // Check if adding the next line would exceed Discord's embed description limit (4096 chars).
-                // We use a safe buffer of 4000.
                 if (currentDescription.length + line.length > 4000) {
                     descriptions.push(currentDescription);
                     currentDescription = '';
                 }
                 currentDescription += line;
             }
-            // Add the last or only page to the array.
             descriptions.push(currentDescription);
 
             const embeds = descriptions.map((desc, index) => {
                 return new EmbedBuilder()
                     .setTitle(`Global Relay Groups (Page ${index + 1}/${descriptions.length})`)
-                    .setColor('#FFD700') // Gold color for owner commands
+                    .setColor('#FFD700')
                     .setDescription(desc)
                     .setTimestamp()
                     .setFooter({ text: `Total Groups: ${allGroups.length}` });
             });
 
-            // Since we deferred the reply, we must use followUp for all subsequent messages.
-            // First, we edit the original deferred reply with the first page.
             await interaction.editReply({ embeds: [embeds[0]] });
-
-            // If there are more pages, send them as separate follow-up messages.
             for (let i = 1; i < embeds.length; i++) {
                 await interaction.followUp({ embeds: [embeds[i]], ephemeral: true });
             }
+        }
+
+        if (subcommand === 'delete_group') {
+            const groupName = interaction.options.getString('name');
+            
+            // [UPGRADE] Also get the owner's ID so we can leave the server.
+            const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
+
+            if (!group) {
+                return interaction.reply({ content: `Error: No group found with the exact name "${groupName}".`, ephemeral: true });
+            }
+
+            // Perform the database deletion first.
+            const result = db.prepare('DELETE FROM relay_groups WHERE group_id = ?').run(group.group_id);
+            let responseMessage = '';
+
+            if (result.changes > 0) {
+                responseMessage += `✅ **Success:** Forcibly deleted the global group "**${groupName}**" and all of its associated data.`;
+            } else {
+                responseMessage += 'An unexpected error occurred. The group was not deleted from the database.';
+                return interaction.reply({ content: responseMessage, ephemeral: true });
+            }
+            
+            // [NEW] Now, attempt to leave the server.
+            try {
+                const guildToLeave = await interaction.client.guilds.fetch(group.owner_guild_id);
+                if (guildToLeave) {
+                    await guildToLeave.leave();
+                    responseMessage += `\n\nAdditionally, I have successfully left the owner's server, **${guildToLeave.name}**.`;
+                }
+            } catch (error) {
+                // This catch block will run if the bot is not in the server, or if there's another issue.
+                console.error(`[OWNER] Could not leave guild ${group.owner_guild_id}:`, error.message);
+                responseMessage += `\n\nI was unable to leave the owner's server (ID: \`${group.owner_guild_id}\`). I may no longer be a member.`;
+            }
+
+            await interaction.reply({ content: responseMessage, ephemeral: true });
         }
     },
 };
