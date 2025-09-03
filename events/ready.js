@@ -11,43 +11,61 @@ async function runDailyVoteReminder(client) {
     const votePayload = createVoteMessage();
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
-
-    const allLinkedChannels = db.prepare('SELECT channel_id, webhook_url FROM linked_channels').all();
-    if (allLinkedChannels.length === 0) {
-        console.log('[Tasks] No linked channels found. Vote reminder task finished.');
+    
+    // To avoid checking the same server multiple times, let's get a unique list of guilds.
+    const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
+    if (allLinkedGuilds.length === 0) {
+        console.log('[Tasks] No linked guilds found. Vote reminder task finished.');
         return;
     }
 
-    console.log(`[Tasks] Checking ${allLinkedChannels.length} channel(s) for reminders.`);
+    console.log(`[Tasks] Checking ${allLinkedGuilds.length} unique server(s) for supporters...`);
+    
+    const guildsWithoutSupporters = new Set();
 
-    for (const channelInfo of allLinkedChannels) {
+    for (const guildInfo of allLinkedGuilds) {
         try {
-            const channel = await client.channels.fetch(channelInfo.channel_id);
-            // We need the guild object to get a reliable member list.
-            if (!channel || !channel.guild) continue;
+            const guild = await client.guilds.fetch(guildInfo.guild_id);
+            if (!guild) continue;
 
-            // [THE CRITICAL FIX] Use the guild's member cache, not the channel's.
-            // This is the same logic we used to fix the /relay list_servers command.
-            const guild = channel.guild;
-            const hasSupporter = guild.members.cache.some(member => !member.user.bot && isSupporter(member.id));
+            // [THE CRITICAL FIX] Actively fetch all members from the server.
+            // This is required for large servers where the member cache is incomplete.
+            const members = await guild.members.fetch();
+            
+            const hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
 
-            // Diagnostic logging now uses the guild name for clarity.
-            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Found ${guild.memberCount} members. Does it contain a supporter? -> ${hasSupporter}`);
+            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
 
-            if (hasSupporter) {
-                console.log(`[Tasks] [SKIP] Skipping channels in "${guild.name}" because at least one member is a supporter.`);
-                // Note: This now skips all channels in a server if one supporter is found.
-                // This is a simplification but is more reliable and less spammy.
-                continue;
+            if (!hasSupporter) {
+                guildsWithoutSupporters.add(guild.id);
+            } else {
+                console.log(`[Tasks] [SKIP] Server "${guild.name}" will be skipped because a supporter was found.`);
             }
+        } catch (error) {
+            console.error(`[Tasks] FAILED to process guild ${guildInfo.guild_id}. It may be unavailable. Error: ${error.message}`);
+        }
+    }
+    
+    if (guildsWithoutSupporters.size === 0) {
+        console.log('[Tasks] All servers have supporters. No reminders to send. Task finished.');
+        return;
+    }
+    
+    // Now, get all channels that belong to the guilds that need a reminder.
+    const channelsToSendTo = db.prepare(`
+        SELECT channel_id, webhook_url FROM linked_channels 
+        WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})
+    `).all();
 
-            console.log(`[Tasks] [SEND] Sending reminder to channel #${channel.name}.`);
+    console.log(`[Tasks] Sending reminders to ${channelsToSendTo.length} channel(s) across ${guildsWithoutSupporters.size} server(s).`);
 
+    for (const channelInfo of channelsToSendTo) {
+        try {
             const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
             await webhookClient.send(votePayload);
-
         } catch (error) {
             const channelName = client.channels.cache.get(channelInfo.channel_id)?.name ?? channelInfo.channel_id;
+            // Self-healing logic for dead webhooks/channels
             if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
                 console.warn(`[Tasks] [AUTO-CLEANUP] Removing invalid channel/webhook for #${channelName}.`);
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
@@ -65,7 +83,7 @@ function scheduleNextNoonTask(client) {
     const nextRun = new Date();
     
     // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
-    // We set it to 12:12 PM PDT, which is 19:12 UTC.
+    // We set it to 12:00 PM PDT, which is 19:00 UTC.
     const targetUtcHour = 19;
     const targetUtcMinute = 0;
     nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
