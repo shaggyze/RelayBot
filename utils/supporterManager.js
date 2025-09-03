@@ -25,12 +25,11 @@ function fetchFile(url) {
         }).on('error', (error) => {
             console.error(`Error fetching file from ${url}:`, error);
             resolve('');
-        }); // [THE FIX IS HERE] This was previously incorrect syntax.
+        });
     });
 }
 
-
-// This function now sends a JSON payload in its "poke".
+// This function sends the "poke" to the webhook to trigger cleanup.
 function triggerCleanup() {
     return new Promise((resolve) => {
         if (!WEBHOOK_URL.startsWith('http')) {
@@ -38,7 +37,7 @@ function triggerCleanup() {
         }
 
         const postData = JSON.stringify({
-            user: '182938628643749888', // Your ID as a clear identifier
+            user: '182938628643749888',
             type: 'cleanup'
         });
 
@@ -87,16 +86,24 @@ async function fetchSupporterIds() {
 
     const combinedIds = new Set();
 
-    patronData.split(/\s+/).filter(id => id.length > 0).forEach(id => combinedIds.add(id));
-    const patronCount = combinedIds.size;
+    // [THE FIX] Process and count each list independently before combining.
+    const patronList = patronData.split(/\s+/).filter(id => id.length > 0);
+    const voterList = voterData.split(/\s+/).filter(line => line.length > 0);
 
-    voterData.split(/\s+/).filter(line => line.length > 0).forEach(line => {
+    const patronCount = patronList.length;
+    const voterCount = voterList.length;
+
+    // Now, add them to the Set for the bot's use.
+    patronList.forEach(id => combinedIds.add(id));
+    voterList.forEach(line => {
         const userId = line.split(',')[0];
         if (userId) combinedIds.add(userId);
     });
     
     supporterIds = combinedIds;
-    console.log(`[Supporters] Successfully loaded ${patronCount} patrons and ${supporterIds.size - patronCount} active voters. Total: ${supporterIds.size}`);
+    
+    // The log now uses the independent counts for accuracy.
+    console.log(`[Supporters] Successfully loaded ${patronCount} patrons and ${voterCount} active voters. Total unique supporters: ${supporterIds.size}`);
 }
 
 function isSupporter(userId) {
