@@ -156,11 +156,10 @@ module.exports = {
 
             } else if (subcommand === 'list_servers') {
                 const groupName = interaction.options.getString('group_name');
-                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+                const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
                 if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists.`, ephemeral: true });
 
                 const allLinks = db.prepare('SELECT guild_id, channel_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
-                if (allLinks.length === 0) return interaction.reply({ content: `There are no channels currently linked to group "**${groupName}**".`, ephemeral: true });
                 
                 // Group channels by their guild ID
                 const guildsToChannels = new Map();
@@ -171,25 +170,31 @@ module.exports = {
                     guildsToChannels.get(link.guild_id).push(link.channel_id);
                 }
 
-                // [NEW LOGIC] Build the description string with accurate server counts.
+                // [THE FIX] Ensure the owner server is always in the map, even if it has no channels.
+                if (!guildsToChannels.has(group.owner_guild_id)) {
+                    guildsToChannels.set(group.owner_guild_id, []);
+                }
+                
                 let description = '';
                 for (const [guildId, channelIds] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
                     
                     if (guild) {
-                        // Use the reliable guild.memberCount for total members.
                         const memberCount = guild.memberCount;
-                        // Filter the guild's member cache for supporters. This is more reliable than the channel cache.
                         const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
-                        
                         description += `• **${guild.name}** (${memberCount} Members / ${supporterCount} Supporters)\n`;
                     } else {
                         description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
                     }
                     
-                    // List the channels under the server.
-                    for (const cid of channelIds) {
-                        description += `  └─ <#${cid}>\n`;
+                    // List the channels under the server, or a message if none are linked.
+                    if (channelIds.length > 0) {
+                        for (const cid of channelIds) {
+                            const channel = interaction.client.channels.cache.get(cid);
+                            description += `  └─ ${channel ? `<#${cid}> (#${channel.name})` : `Inaccessible Channel (ID: \`${cid}\`)`}\n`;
+                        }
+                    } else {
+                        description += `  └─ *(No channels linked from this server)*\n`;
                     }
                 }
 
