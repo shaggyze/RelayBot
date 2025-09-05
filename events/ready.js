@@ -111,7 +111,22 @@ module.exports = {
     async execute(client) {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
-        
+
+        // --- [NEW] Prime the Member Cache at Startup ---
+        console.log('[Cache] Priming member cache for all guilds...');
+        try {
+            const guilds = Array.from(client.guilds.cache.values());
+            for (const guild of guilds) {
+                console.log(`[Cache] Fetching members for "${guild.name}" (${guild.id})...`);
+                await guild.members.fetch();
+                console.log(`[Cache] Successfully cached ${guild.memberCount} members for "${guild.name}".`);
+            }
+            console.log('[Cache] Member cache priming complete.');
+        } catch (error) {
+            console.error('[Cache] An error occurred during member cache priming:', error);
+        }
+
+        // --- Supporter Cache Initialization and Refresh Timer ---
         await fetchSupporterIds();
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
