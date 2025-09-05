@@ -29,21 +29,32 @@ async function runDailyVoteReminder(client) {
         try {
             guild = await client.guilds.fetch(guildInfo.guild_id);
             if (!guild) {
-                console.warn(`[Tasks] Could not fetch guild ${guildInfo.guild_id}. It may be unavailable.`);
+                // This case should be caught by the error handler below, but it's good practice.
                 continue;
             }
 
-            // [FIX #1] Increase the timeout for fetching members to 2 minutes (120,000 ms).
-            const members = await guild.members.fetch({ time: 120000 });
+            const members = await guild.members.fetch({ time: 120000 }); // Keep the 2-minute timeout
             hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
             console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
 
         } catch (error) {
-            // [FIX #2] The crash is fixed here. We use the 'guild' variable from the try block.
-            const guildName = guild ? guild.name : `Unknown Guild (${guildInfo.guild_id})`;
+            const guildId = guildInfo.guild_id;
+            const guildName = guild ? guild.name : `Unknown Guild (${guildId})`;
+
+            // [NEW AUTO-CLEANUP LOGIC]
+            // DiscordAPIError code 10004 is "Unknown Guild".
+            if (error.code === 10004) {
+                console.warn(`[Tasks] [AUTO-CLEANUP] Guild ${guildId} is unknown (bot was likely kicked or server deleted). Pruning all associated data from the database.`);
+                db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
+                db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
+                db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
+                // Since we've cleaned up, there's nothing more to do with this guild in this loop.
+                continue; // This skips the hasSupporter check and sending logic for this iteration.
+            }
             
+            // Keep the existing timeout handling.
             if (error.code === 'GuildMembersTimeout') {
-                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time. The API is likely under heavy load. Skipping this server as a precaution.`);
+                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time. Skipping this server as a precaution.`);
             } else {
                 console.error(`[Tasks] [ERROR] FAILED to process guild "${guildName}". Error: ${error.message}`);
             }
@@ -78,7 +89,6 @@ async function runDailyVoteReminder(client) {
             await webhookClient.send(votePayload);
         } catch (error) {
             const channelName = client.channels.cache.get(channelInfo.channel_id)?.name ?? channelInfo.channel_id;
-            // Self-healing logic for dead webhooks/channels
             if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
                 console.warn(`[Tasks] [AUTO-CLEANUP] Removing invalid channel/webhook for #${channelName}.`);
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
@@ -96,13 +106,11 @@ function scheduleNextNoonTask(client) {
     const nextRun = new Date();
     
     // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
-    // We set it to 12:00 PM PDT, which is 19:00 UTC.
-    const targetUtcHour = 20;
-    const targetUtcMinute = 20;
+    const targetUtcHour = 19;
+    const targetUtcMinute = 0; // Set to 0 for exactly noon
     nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
 
     if (now > nextRun) {
-        // If it's already past the target time today in UTC, schedule for the next day.
         nextRun.setUTCDate(nextRun.getUTCDate() + 1);
     }
 
@@ -113,7 +121,7 @@ function scheduleNextNoonTask(client) {
 
     setTimeout(() => {
         runDailyVoteReminder(client);
-        scheduleNextNoonTask(client); // Reschedule for the next day after running.
+        scheduleNextNoonTask(client);
     }, delay);
 }
 
