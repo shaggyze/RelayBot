@@ -5,8 +5,6 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
-// [PART 2 - THE "USING" LOGIC]
-// This function now relies on the pre-filled cache and NEVER calls fetch() itself.
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
     await fetchSupporterIds();
@@ -16,7 +14,7 @@ async function runDailyVoteReminder(client) {
     
     const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
     if (allLinkedGuilds.length === 0) {
-        console.log('[Tasks] No linked guilds found. Vote reminder task finished.');
+        console.log('[Tasks] No linked guilds found. Task finished.');
         return;
     }
 
@@ -25,27 +23,54 @@ async function runDailyVoteReminder(client) {
     const guildsWithoutSupporters = new Set();
 
     for (const guildInfo of allLinkedGuilds) {
-        // We get the guild from the cache, which was populated at startup.
-        const guild = client.guilds.cache.get(guildInfo.guild_id);
-        if (!guild) {
-            console.warn(`[Tasks] Could not find guild ${guildInfo.guild_id} in cache. It may have been left.`);
-            continue;
+        let hasSupporter = false; // Assume no supporter by default
+        let members;
+
+        try {
+            const guild = await client.guilds.fetch(guildInfo.guild_id);
+            if (!guild) continue;
+
+            // [THE FALLBACK FIX - PART 1: The 'Try' Block]
+            // We optimistically try to fetch the full member list.
+            console.log(`[Tasks] [DIAGNOSTIC] Fetching members for server "${guild.name}"...`);
+            members = await guild.members.fetch();
+            hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
+            console.log(`[Tasks] [DIAGNOSTIC] Successfully fetched ${members.size} members for "${guild.name}". Does it contain a supporter? -> ${hasSupporter}`);
+
+        } catch (error) {
+            // [THE FALLBACK FIX - PART 2: The 'Catch' Block]
+            // If fetching fails, we check for the specific timeout error.
+            if (error.code === 'GuildMembersTimeout') {
+                console.warn(`[Tasks] [WARN] Timed out while fetching members for large server "${error.guild.name}".`);
+                
+                // Fallback logic: check the incomplete cache instead.
+                const cachedMembers = error.guild.members.cache;
+                hasSupporter = cachedMembers.some(member => !member.user.bot && isSupporter(member.id));
+                console.warn(`[Tasks] [DIAGNOSTIC] Checking incomplete cache for "${error.guild.name}" (${cachedMembers.size} members). Does it contain a supporter? -> ${hasSupporter}`);
+
+                // If no supporter is found even in the cache, we still skip as a safety measure.
+                if (!hasSupporter) {
+                    console.warn(`[Tasks] [SKIP] Skipping server "${error.guild.name}" as a precaution due to incomplete member list.`);
+                    hasSupporter = true; // Force a skip to prevent spamming.
+                }
+
+            } else {
+                console.error(`[Tasks] FAILED to process guild ${guildInfo.guild_id}. It may be unavailable. Error: ${error.message}`);
+                // Skip this guild on other errors too.
+                continue;
+            }
         }
 
-        // [THE FIX] We now read directly from the 'guild.members.cache', which is fast and reliable.
-        const hasSupporter = guild.members.cache.some(member => !member.user.bot && isSupporter(member.id));
-
-        console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Found ${guild.members.cache.size} cached members. Does it contain a supporter? -> ${hasSupporter}`);
-
         if (!hasSupporter) {
-            guildsWithoutSupporters.add(guild.id);
+            guildsWithoutSupporters.add(guildInfo.guild_id);
         } else {
-            console.log(`[Tasks] [SKIP] Server "${guild.name}" will be skipped because a supporter was found in the cache.`);
+            const guildName = client.guilds.cache.get(guildInfo.guild_id)?.name ?? 'Unknown Guild';
+            console.log(`[Tasks] [SKIP] Server "${guildName}" will be skipped.`);
         }
     }
     
     if (guildsWithoutSupporters.size === 0) {
-        console.log('[Tasks] All servers have supporters. No reminders to send. Task finished.');
+        console.log('[Tasks] No servers need reminders. Task finished.');
         return;
     }
     
@@ -108,22 +133,7 @@ module.exports = {
     async execute(client) {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
-
-        // --- [NEW] Prime the Member Cache at Startup ---
-        console.log('[Cache] Priming member cache for all guilds...');
-        try {
-            const guilds = Array.from(client.guilds.cache.values());
-            for (const guild of guilds) {
-                console.log(`[Cache] Fetching members for "${guild.name}" (${guild.id})...`);
-                await guild.members.fetch();
-                console.log(`[Cache] Successfully cached ${guild.memberCount} members for "${guild.name}".`);
-            }
-            console.log('[Cache] Member cache priming complete.');
-        } catch (error) {
-            console.error('[Cache] An error occurred during member cache priming:', error);
-        }
-
-        // --- Supporter Cache Initialization and Refresh Timer ---
+        
         await fetchSupporterIds();
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
