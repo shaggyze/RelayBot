@@ -33,8 +33,8 @@ async function runDailyVoteReminder(client) {
                 continue;
             }
 
-            // [FIX #1] Increase the timeout for fetching members to 3 minutes (180,000 ms).
-            const members = await guild.members.fetch({ time: 180000 });
+            // [FIX #1] Increase the timeout for fetching members to 2 minutes (120,000 ms).
+            const members = await guild.members.fetch({ time: 120000 });
             hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
             console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
 
@@ -97,8 +97,8 @@ function scheduleNextNoonTask(client) {
     
     // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
     // We set it to 12:00 PM PDT, which is 19:00 UTC.
-    const targetUtcHour = 19;
-    const targetUtcMinute = 50;
+    const targetUtcHour = 20;
+    const targetUtcMinute = 20;
     nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
 
     if (now > nextRun) {
