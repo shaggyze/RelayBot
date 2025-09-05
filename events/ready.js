@@ -5,6 +5,8 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
+// [PART 2 - THE "USING" LOGIC]
+// This function now relies on the pre-filled cache and NEVER calls fetch() itself.
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
     await fetchSupporterIds();
@@ -12,7 +14,6 @@ async function runDailyVoteReminder(client) {
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
     
-    // To avoid checking the same server multiple times, let's get a unique list of guilds.
     const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
     if (allLinkedGuilds.length === 0) {
         console.log('[Tasks] No linked guilds found. Vote reminder task finished.');
@@ -24,25 +25,22 @@ async function runDailyVoteReminder(client) {
     const guildsWithoutSupporters = new Set();
 
     for (const guildInfo of allLinkedGuilds) {
-        try {
-            const guild = await client.guilds.fetch(guildInfo.guild_id);
-            if (!guild) continue;
+        // We get the guild from the cache, which was populated at startup.
+        const guild = client.guilds.cache.get(guildInfo.guild_id);
+        if (!guild) {
+            console.warn(`[Tasks] Could not find guild ${guildInfo.guild_id} in cache. It may have been left.`);
+            continue;
+        }
 
-            // [THE CRITICAL FIX] Actively fetch all members from the server.
-            // This is required for large servers where the member cache is incomplete.
-            const members = await guild.members.fetch();
-            
-            const hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
+        // [THE FIX] We now read directly from the 'guild.members.cache', which is fast and reliable.
+        const hasSupporter = guild.members.cache.some(member => !member.user.bot && isSupporter(member.id));
 
-            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+        console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Found ${guild.members.cache.size} cached members. Does it contain a supporter? -> ${hasSupporter}`);
 
-            if (!hasSupporter) {
-                guildsWithoutSupporters.add(guild.id);
-            } else {
-                console.log(`[Tasks] [SKIP] Server "${guild.name}" will be skipped because a supporter was found.`);
-            }
-        } catch (error) {
-            console.error(`[Tasks] FAILED to process guild ${guildInfo.guild_id}. It may be unavailable. Error: ${error.message}`);
+        if (!hasSupporter) {
+            guildsWithoutSupporters.add(guild.id);
+        } else {
+            console.log(`[Tasks] [SKIP] Server "${guild.name}" will be skipped because a supporter was found in the cache.`);
         }
     }
     
@@ -51,7 +49,6 @@ async function runDailyVoteReminder(client) {
         return;
     }
     
-    // Now, get all channels that belong to the guilds that need a reminder.
     const channelsToSendTo = db.prepare(`
         SELECT channel_id, webhook_url FROM linked_channels 
         WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})
