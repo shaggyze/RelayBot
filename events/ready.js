@@ -23,54 +23,45 @@ async function runDailyVoteReminder(client) {
     const guildsWithoutSupporters = new Set();
 
     for (const guildInfo of allLinkedGuilds) {
-        let hasSupporter = false; // Assume no supporter by default
-        let members;
+        let hasSupporter = false;
+        let guild; // Define guild in the outer scope so the catch block can access it
 
         try {
-            const guild = await client.guilds.fetch(guildInfo.guild_id);
-            if (!guild) continue;
-
-            // [THE FALLBACK FIX - PART 1: The 'Try' Block]
-            // We optimistically try to fetch the full member list.
-            console.log(`[Tasks] [DIAGNOSTIC] Fetching members for server "${guild.name}"...`);
-            members = await guild.members.fetch();
-            hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
-            console.log(`[Tasks] [DIAGNOSTIC] Successfully fetched ${members.size} members for "${guild.name}". Does it contain a supporter? -> ${hasSupporter}`);
-
-        } catch (error) {
-            // [THE FALLBACK FIX - PART 2: The 'Catch' Block]
-            // If fetching fails, we check for the specific timeout error.
-            if (error.code === 'GuildMembersTimeout') {
-                console.warn(`[Tasks] [WARN] Timed out while fetching members for large server "${error.guild.name}".`);
-                
-                // Fallback logic: check the incomplete cache instead.
-                const cachedMembers = error.guild.members.cache;
-                hasSupporter = cachedMembers.some(member => !member.user.bot && isSupporter(member.id));
-                console.warn(`[Tasks] [DIAGNOSTIC] Checking incomplete cache for "${error.guild.name}" (${cachedMembers.size} members). Does it contain a supporter? -> ${hasSupporter}`);
-
-                // If no supporter is found even in the cache, we still skip as a safety measure.
-                if (!hasSupporter) {
-                    console.warn(`[Tasks] [SKIP] Skipping server "${error.guild.name}" as a precaution due to incomplete member list.`);
-                    hasSupporter = true; // Force a skip to prevent spamming.
-                }
-
-            } else {
-                console.error(`[Tasks] FAILED to process guild ${guildInfo.guild_id}. It may be unavailable. Error: ${error.message}`);
-                // Skip this guild on other errors too.
+            guild = await client.guilds.fetch(guildInfo.guild_id);
+            if (!guild) {
+                console.warn(`[Tasks] Could not fetch guild ${guildInfo.guild_id}. It may be unavailable.`);
                 continue;
             }
+
+            // [FIX #1] Increase the timeout for fetching members to 3 minutes (180,000 ms).
+            const members = await guild.members.fetch({ time: 180000 });
+            hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
+            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+
+        } catch (error) {
+            // [FIX #2] The crash is fixed here. We use the 'guild' variable from the try block.
+            const guildName = guild ? guild.name : `Unknown Guild (${guildInfo.guild_id})`;
+            
+            if (error.code === 'GuildMembersTimeout') {
+                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time. The API is likely under heavy load. Skipping this server as a precaution.`);
+            } else {
+                console.error(`[Tasks] [ERROR] FAILED to process guild "${guildName}". Error: ${error.message}`);
+            }
+            
+            // As a safety measure, we will assume a supporter is present and skip this guild if we can't check it properly.
+            hasSupporter = true;
         }
 
         if (!hasSupporter) {
             guildsWithoutSupporters.add(guildInfo.guild_id);
         } else {
-            const guildName = client.guilds.cache.get(guildInfo.guild_id)?.name ?? 'Unknown Guild';
+            const guildName = client.guilds.cache.get(guildInfo.guild_id)?.name ?? `Guild ID ${guildInfo.guild_id}`;
             console.log(`[Tasks] [SKIP] Server "${guildName}" will be skipped.`);
         }
     }
     
     if (guildsWithoutSupporters.size === 0) {
-        console.log('[Tasks] No servers need reminders. Task finished.');
+        console.log('[Tasks] All servers have supporters. No reminders to send. Task finished.');
         return;
     }
     
@@ -107,7 +98,7 @@ function scheduleNextNoonTask(client) {
     // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
     // We set it to 12:00 PM PDT, which is 19:00 UTC.
     const targetUtcHour = 19;
-    const targetUtcMinute = 0;
+    const targetUtcMinute = 50;
     nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
 
     if (now > nextRun) {
