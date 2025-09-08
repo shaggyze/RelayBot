@@ -144,15 +144,25 @@ module.exports = {
                 await interaction.reply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**.`, ephemeral: true });
 
             } else if (subcommand === 'unlink_channel') {
-                const link = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!link) return interaction.reply({ content: `This channel is not linked to any relay group.`, ephemeral: true });
+                // [THE FIX] Defer the reply immediately to handle potential delays.
+                await interaction.deferReply({ ephemeral: true });
 
+                const link = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
+                if (!link) {
+                    return interaction.editReply({ content: `This channel is not linked to any relay group.` });
+                }
+
+                // This section can be slow, but it's okay now that we've deferred.
                 const webhooks = await interaction.channel.fetchWebhooks();
                 const webhookToDelete = webhooks.find(wh => wh.url === link.webhook_url);
-                if (webhookToDelete) await webhookToDelete.delete('Relay channel unlinked.');
+                if (webhookToDelete) {
+                    await webhookToDelete.delete('Relay channel unlinked.');
+                }
 
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelId);
-                await interaction.reply({ content: `✅ This channel has been unlinked from its group.`, ephemeral: true });
+                
+                // Use editReply to update the "thinking..." message.
+                await interaction.editReply({ content: `✅ This channel has been unlinked from its group.` });
 
             } else if (subcommand === 'list_servers') {
                 const groupName = interaction.options.getString('group_name');
@@ -265,18 +275,22 @@ module.exports = {
             }
 
         } catch (error) {
-            if (error.code === 30007) {
-                await interaction.reply({ content: `❌ **Error:** This channel has reached the maximum number of webhooks (15). I cannot create a new one. An admin must delete an unused webhook from \`Edit Channel\` > \`Integrations\` > \`Webhooks\` before I can link this channel.`, ephemeral: true });
-            } else if (error.code === 50013) {
+            // [THE FINAL FIX] We are adding a new condition here.
+            if (error.code === 10003) { // 10003 = Unknown Channel
+                await interaction.reply({ content: `❌ **Error:** It seems this channel no longer exists on Discord. I can't perform this action.`, ephemeral: true });
+            } else if (error.code === 30007) { // Maximum number of webhooks
+                await interaction.reply({ content: `❌ **Error:** This channel has reached the maximum number of webhooks (15). An admin must delete an unused webhook before I can link this channel.`, ephemeral: true });
+            } else if (error.code === 50013) { // Missing Permissions
                 await interaction.reply({ content: '❌ **Error:** I am missing critical permissions! Please ensure I have the `Manage Webhooks` and `Manage Roles` permissions.', ephemeral: true });
             } else if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
                 await interaction.reply({ content: `❌ **Error:** An item with that name or ID already exists in the database.`, ephemeral: true });
             } else {
+                // The fallback for any other unexpected errors.
                 console.error(`Error in /relay ${subcommand}:`, error);
                 if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({ content: 'An unknown error occurred.', ephemeral: true });
+                    await interaction.followUp({ content: 'An unknown error occurred. The developer has been notified.', ephemeral: true });
                 } else {
-                    await interaction.reply({ content: 'An unknown error occurred.', ephemeral: true });
+                    await interaction.reply({ content: 'An unknown error occurred. The developer has been notified.', ephemeral: true });
                 }
             }
         }

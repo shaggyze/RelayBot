@@ -73,21 +73,23 @@ module.exports = {
         }
 
         if (subcommand === 'delete_group') {
+            // [THE FIX] Defer the reply immediately.
+            await interaction.deferReply({ ephemeral: true });
+
             const groupName = interaction.options.getString('name');
             const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
 
             if (!group) {
-                return interaction.reply({ content: `Error: No group found with the exact name "${groupName}".`, ephemeral: true });
+                return interaction.editReply({ content: `Error: No group found with the exact name "${groupName}".` });
             }
 
             const result = db.prepare('DELETE FROM relay_groups WHERE group_id = ?').run(group.group_id);
             let responseMessage = '';
 
             if (result.changes > 0) {
-                responseMessage += `✅ **Success:** Forcibly deleted the global group "**${groupName}**" and all of its associated data.`;
+                responseMessage += `✅ **Success:** Forcibly deleted the global group "**${groupName}**".`;
             } else {
-                responseMessage += 'An unexpected error occurred. The group was not deleted from the database.';
-                return interaction.reply({ content: responseMessage, ephemeral: true });
+                return interaction.editReply({ content: 'An unexpected error occurred. The group was not deleted.' });
             }
             
             try {
@@ -97,11 +99,11 @@ module.exports = {
                     responseMessage += `\n\nAdditionally, I have successfully left the owner's server, **${guildToLeave.name}**.`;
                 }
             } catch (error) {
-                console.error(`[OWNER] Could not leave guild ${group.owner_guild_id}:`, error.message);
                 responseMessage += `\n\nI was unable to leave the owner's server (ID: \`${group.owner_guild_id}\`). I may no longer be a member.`;
             }
-
-            await interaction.reply({ content: responseMessage, ephemeral: true });
+            
+            // Use editReply to update the "thinking..." message.
+            await interaction.editReply({ content: responseMessage });
         }
 
         if (subcommand === 'prune_db') {
