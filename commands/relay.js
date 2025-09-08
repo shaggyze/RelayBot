@@ -123,66 +123,61 @@ module.exports = {
                 }
 
             } else if (subcommand === 'link_channel') {
+                // [FIX] Defer the reply to prevent timeouts.
+                await interaction.deferReply({ ephemeral: true });
+
                 const existingLink = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (existingLink) return interaction.reply({ content: '❌ **Error:** This channel is already linked to a relay group. Please use `/relay unlink_channel` first.', ephemeral: true });
+                if (existingLink) return interaction.editReply({ content: '❌ **Error:** This channel is already linked to a relay group. Please use `/relay unlink_channel` first.' });
                 
                 const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
                 if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks)) {
                     const errorEmbed = new EmbedBuilder().setColor('#ED4245').setTitle('Permission Error').setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`).addFields({ name: 'How to Fix', value: 'An admin needs to go to `Edit Channel` > `Permissions` and ensure my role ("RelayBot") has the "Manage Webhooks" permission enabled here.' });
-                    return interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                    return interaction.editReply({ embeds: [errorEmbed] });
                 }
 
                 const groupName = interaction.options.getString('group_name');
                 const direction = interaction.options.getString('direction') ?? 'BOTH';
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.`, ephemeral: true });
+                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.` });
 
                 const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
                 db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction) VALUES (?, ?, ?, ?, ?)')
                   .run(channelId, guildId, group.group_id, webhook.url, direction);
                 
-                await interaction.reply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**.`, ephemeral: true });
+                await interaction.editReply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**.` });
 
             } else if (subcommand === 'unlink_channel') {
-                // [THE FIX] Defer the reply immediately to handle potential delays.
+                // This command was already correctly deferred in your provided code.
                 await interaction.deferReply({ ephemeral: true });
-
                 const link = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!link) {
-                    return interaction.editReply({ content: `This channel is not linked to any relay group.` });
-                }
+                if (!link) return interaction.editReply({ content: `This channel is not linked to any relay group.` });
 
-                // This section can be slow, but it's okay now that we've deferred.
                 const webhooks = await interaction.channel.fetchWebhooks();
                 const webhookToDelete = webhooks.find(wh => wh.url === link.webhook_url);
-                if (webhookToDelete) {
-                    await webhookToDelete.delete('Relay channel unlinked.');
-                }
+                if (webhookToDelete) await webhookToDelete.delete('Relay channel unlinked.');
 
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelId);
-                
-                // Use editReply to update the "thinking..." message.
                 await interaction.editReply({ content: `✅ This channel has been unlinked from its group.` });
 
             } else if (subcommand === 'list_servers') {
+                // [FIX] Defer the reply to prevent timeouts.
+                await interaction.deferReply({ ephemeral: true });
+
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.reply({ content: `❌ No global group named "**${groupName}**" exists.`, ephemeral: true });
+                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
 
                 const allLinks = db.prepare('SELECT guild_id, channel_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
                 
-                // Group channels by their guild ID
                 const guildsToChannels = new Map();
+                if (!guildsToChannels.has(group.owner_guild_id)) {
+                    guildsToChannels.set(group.owner_guild_id, []);
+                }
                 for (const link of allLinks) {
                     if (!guildsToChannels.has(link.guild_id)) {
                         guildsToChannels.set(link.guild_id, []);
                     }
                     guildsToChannels.get(link.guild_id).push(link.channel_id);
-                }
-
-                // [THE FIX] Ensure the owner server is always in the map, even if it has no channels.
-                if (!guildsToChannels.has(group.owner_guild_id)) {
-                    guildsToChannels.set(group.owner_guild_id, []);
                 }
                 
                 let description = '';
@@ -197,7 +192,6 @@ module.exports = {
                         description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
                     }
                     
-                    // List the channels under the server, or a message if none are linked.
                     if (channelIds.length > 0) {
                         for (const cid of channelIds) {
                             const channel = interaction.client.channels.cache.get(cid);
