@@ -160,7 +160,6 @@ module.exports = {
                 await interaction.editReply({ content: `✅ This channel has been unlinked from its group.` });
 
             } else if (subcommand === 'list_servers') {
-                // [FIX] Defer the reply to prevent timeouts.
                 await interaction.deferReply({ ephemeral: true });
 
                 const groupName = interaction.options.getString('group_name');
@@ -183,7 +182,6 @@ module.exports = {
                 let description = '';
                 for (const [guildId, channelIds] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
-                    
                     if (guild) {
                         const memberCount = guild.memberCount;
                         const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
@@ -207,7 +205,7 @@ module.exports = {
                     .setColor('#5865F2')
                     .setDescription(description.trim());
                 
-                await interaction.reply({ embeds: [listEmbed], ephemeral: true });
+                await interaction.editReply({ embeds: [listEmbed] });
 
             } else if (subcommand === 'map_role') {
                 const groupName = interaction.options.getString('group_name');
