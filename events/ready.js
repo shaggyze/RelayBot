@@ -5,6 +5,21 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 
+async function primeMemberCache(client) {
+    console.log('[Cache] Starting background member cache priming for all guilds...');
+    const guilds = Array.from(client.guilds.cache.values());
+    for (const guild of guilds) {
+        try {
+            console.log(`[Cache] Fetching members for "${guild.name}"...`);
+            await guild.members.fetch();
+            console.log(`[Cache] Successfully cached members for "${guild.name}".`);
+        } catch (error) {
+            console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). This may be due to API load or missing permissions. The daily task will rely on a partial cache for this guild. Error: ${error.message}`);
+        }
+    }
+    console.log('[Cache] Background member cache priming complete.');
+}
+
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
     await fetchSupporterIds();
@@ -133,6 +148,12 @@ module.exports = {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
         
+        // [THE DEFINITIVE FIX]
+        // Start the cache priming process, but DO NOT await it.
+        // This lets the bot become responsive to commands immediately.
+        primeMemberCache(client);
+
+        // --- Supporter Cache Initialization and Refresh Timer ---
         await fetchSupporterIds();
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
