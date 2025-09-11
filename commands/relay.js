@@ -27,9 +27,6 @@ module.exports = {
             return await interaction.reply({ content: 'This command can only be used inside a server.', ephemeral: true });
         }
 
-        // [THE DEFINITIVE FIX] Defer the reply for ALL commands at the very beginning.
-        await interaction.deferReply({ ephemeral: true });
-
         const subcommand = interaction.options.getSubcommand();
         const guildId = interaction.guild.id;
         const channelId = interaction.channel.id;
@@ -53,65 +50,68 @@ module.exports = {
                 const groupName = interaction.options.getString('name');
                 try {
                     db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id) VALUES (?, ?)').run(groupName, guildId);
-                    await interaction.editReply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.` });
+                    await interaction.reply({ content: `✅ **Global** relay group "**${groupName}**" has been created!`, ephemeral: true });
                 } catch (error) {
                     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                        await interaction.editReply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.` });
+                        await interaction.reply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists.`, ephemeral: true });
                     } else { throw error; }
                 }
 
             } else if (subcommand === 'delete_group') {
                 const groupName = interaction.options.getString('name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
-                if (group.owner_guild_id !== guildId) return interaction.editReply({ content: `❌ You cannot delete this group because your server did not create it.` });
+                if (!group) return interaction.reply({ content: `❌ No group named "**${groupName}**" exists.`, ephemeral: true });
+                if (group.owner_guild_id !== guildId) return interaction.reply({ content: `❌ You do not own this group.`, ephemeral: true });
                 db.prepare('DELETE FROM relay_groups WHERE group_id = ?').run(group.group_id);
-                await interaction.editReply({ content: `✅ Successfully deleted global group "**${groupName}**".` });
+                await interaction.reply({ content: `✅ Successfully deleted group "**${groupName}**".`, ephemeral: true });
 
             } else if (subcommand === 'kick_server') {
                 const groupName = interaction.options.getString('group_name');
                 const serverIdToKick = interaction.options.getString('server_id');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
-                if (group.owner_guild_id !== guildId) return interaction.editReply({ content: `❌ You cannot manage this group because your server did not create it.` });
-                if (serverIdToKick === guildId) return interaction.editReply({ content: `❌ You cannot kick your own server.` });
+                if (!group) return interaction.reply({ content: `❌ No group named "**${groupName}**" exists.`, ephemeral: true });
+                if (group.owner_guild_id !== guildId) return interaction.reply({ content: `❌ You do not own this group.`, ephemeral: true });
+                if (serverIdToKick === guildId) return interaction.reply({ content: `❌ You cannot kick your own server.`, ephemeral: true });
                 const kickChannels = db.prepare('DELETE FROM linked_channels WHERE group_id = ? AND guild_id = ?').run(group.group_id, serverIdToKick);
                 db.prepare('DELETE FROM role_mappings WHERE group_id = ? AND guild_id = ?').run(group.group_id, serverIdToKick);
                 if (kickChannels.changes > 0) {
-                    await interaction.editReply({ content: `✅ Successfully kicked server \`${serverIdToKick}\` from the "**${groupName}**" group.` });
+                    await interaction.reply({ content: `✅ Successfully kicked server \`${serverIdToKick}\`.`, ephemeral: true });
                 } else {
-                    await interaction.editReply({ content: `That server was not found in the "**${groupName}**" group.` });
+                    await interaction.reply({ content: `That server was not found in the group.`, ephemeral: true });
                 }
 
             } else if (subcommand === 'link_channel') {
+                await interaction.deferReply({ ephemeral: true });
                 const existingLink = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (existingLink) return interaction.editReply({ content: '❌ **Error:** This channel is already linked to a relay group.' });
+                if (existingLink) return interaction.editReply({ content: '❌ **Error:** This channel is already linked.' });
                 const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
                 if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks)) {
-                    const errorEmbed = new EmbedBuilder().setColor('#ED4245').setTitle('Permission Error').setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`).addFields({ name: 'How to Fix', value: 'An admin must enable it in `Edit Channel` > `Permissions`.' });
+                    const errorEmbed = new EmbedBuilder().setColor('#ED4245').setTitle('Permission Error').setDescription(`I am missing the **Manage Webhooks** permission in this channel.`);
                     return interaction.editReply({ embeds: [errorEmbed] });
                 }
                 const groupName = interaction.options.getString('group_name');
                 const direction = interaction.options.getString('direction') ?? 'BOTH';
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
+                if (!group) return interaction.editReply({ content: `❌ No group named "**${groupName}**" exists.` });
                 const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
                 db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction) VALUES (?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhook.url, direction);
-                await interaction.editReply({ content: `✅ This channel has been successfully linked to the "**${groupName}**" group with direction set to **${direction}**.` });
+                await interaction.editReply({ content: `✅ This channel is now linked to "**${groupName}**" with direction **${direction}**.` });
 
             } else if (subcommand === 'unlink_channel') {
+                await interaction.deferReply({ ephemeral: true });
                 const link = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!link) return interaction.editReply({ content: `This channel is not linked to any relay group.` });
+                if (!link) return interaction.editReply({ content: `This channel is not linked.` });
                 const webhooks = await interaction.channel.fetchWebhooks();
                 const webhookToDelete = webhooks.find(wh => wh.url === link.webhook_url);
                 if (webhookToDelete) await webhookToDelete.delete('Relay channel unlinked.');
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelId);
-                await interaction.editReply({ content: `✅ This channel has been unlinked from its group.` });
+                await interaction.editReply({ content: `✅ This channel has been unlinked.` });
 
             } else if (subcommand === 'list_servers') {
+                await interaction.deferReply({ ephemeral: true });
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
+                if (!group) return interaction.editReply({ content: `❌ No group named "**${groupName}**" exists.` });
                 const allLinks = db.prepare('SELECT guild_id, channel_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
                 const guildsToChannels = new Map();
                 if (!guildsToChannels.has(group.owner_guild_id)) { guildsToChannels.set(group.owner_guild_id, []); }
@@ -123,9 +123,7 @@ module.exports = {
                 for (const [guildId, channelIds] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
                     if (guild) {
-                        const memberCount = guild.memberCount;
-                        const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
-                        description += `• **${guild.name}** (${memberCount} Members / ${supporterCount} Supporters)\n`;
+                        description += `• **${guild.name}** (${guild.memberCount} Members / ${guild.members.cache.filter(m => !m.user.bot && isSupporter(m.id)).size} Supporters)\n`;
                     } else {
                         description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
                     }
@@ -138,7 +136,7 @@ module.exports = {
                         description += `  └─ *(No channels linked from this server)*\n`;
                     }
                 }
-                const listEmbed = new EmbedBuilder().setTitle(`Servers & Channels in Group "${groupName}"`).setColor('#5865F2').setDescription(description.trim());
+                const listEmbed = new EmbedBuilder().setTitle(`Servers in Group "${groupName}"`).setColor('#5865F2').setDescription(description.trim());
                 await interaction.editReply({ embeds: [listEmbed] });
             
             } else if (subcommand === 'map_role') {
@@ -146,59 +144,57 @@ module.exports = {
                 const commonName = interaction.options.getString('common_name');
                 const role = interaction.options.getRole('role');
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
+                if (!group) return interaction.reply({ content: `❌ No group named "**${groupName}**" exists.`, ephemeral: true });
                 db.prepare('INSERT OR REPLACE INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, guildId, commonName, role.id);
-                await interaction.editReply({ content: `✅ Role **${role.name}** is now mapped to "**${commonName}**".` });
+                await interaction.reply({ content: `✅ Role **${role.name}** is now mapped to "**${commonName}**".`, ephemeral: true });
 
             } else if (subcommand === 'list_mappings') {
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
+                if (!group) return interaction.reply({ content: `❌ No group named "**${groupName}**" exists.`, ephemeral: true });
                 const mappings = db.prepare('SELECT role_name, role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? ORDER BY role_name').all(group.group_id, guildId);
-                if (mappings.length === 0) return interaction.editReply({ content: `There are no role mappings configured for group "**${groupName}**".` });
+                if (mappings.length === 0) return interaction.reply({ content: `There are no role mappings for "**${groupName}**".`, ephemeral: true });
                 const description = mappings.map(m => `**${m.role_name}** → <@&${m.role_id}>`).join('\n');
-                const listEmbed = new EmbedBuilder().setTitle(`Role Mappings for Group "${groupName}"`).setColor('#5865F2').setDescription(description).setFooter({ text: `Showing mappings for this server only.` });
-                await interaction.editReply({ embeds: [listEmbed] });
+                const listEmbed = new EmbedBuilder().setTitle(`Role Mappings for Group "${groupName}"`).setColor('#5865F2').setDescription(description);
+                await interaction.reply({ embeds: [listEmbed], ephemeral: true });
             
             } else if (subcommand === 'unmap_role') {
                  const groupName = interaction.options.getString('group_name');
                  const commonName = interaction.options.getString('common_name');
                  const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                 if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
+                 if (!group) return interaction.reply({ content: `❌ No group named "**${groupName}**" exists.`, ephemeral: true });
                  const result = db.prepare('DELETE FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?').run(group.group_id, guildId, commonName);
-                 if (result.changes > 0) await interaction.editReply({ content: `✅ Mapping for "**${commonName}**" removed.` });
-                 else await interaction.editReply({ content: `No mapping found for "**${commonName}**".` });
+                 if (result.changes > 0) await interaction.reply({ content: `✅ Mapping for "**${commonName}**" removed.`, ephemeral: true });
+                 else await interaction.reply({ content: `No mapping found for "**${commonName}**".`, ephemeral: true });
 
             } else if (subcommand === 'set_delete_delay') {
                 const hours = interaction.options.getInteger('hours');
                 db.prepare('UPDATE linked_channels SET delete_delay_hours = ? WHERE channel_id = ?').run(hours, channelId);
-                await interaction.editReply({ content: `✅ Auto-delete delay for this channel set to **${hours} hours**.` });
+                await interaction.reply({ content: `✅ Auto-delete delay set to **${hours} hours**.`, ephemeral: true });
             
             } else if (subcommand === 'toggle_forward_delete') {
                 const channelLink = db.prepare('SELECT allow_forward_delete FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!channelLink) return interaction.editReply({ content: 'This channel is not a linked relay channel.' });
+                if (!channelLink) return interaction.reply({ content: 'This is not a linked relay channel.', ephemeral: true });
                 const newValue = !channelLink.allow_forward_delete;
                 db.prepare('UPDATE linked_channels SET allow_forward_delete = ? WHERE channel_id = ?').run(newValue ? 1 : 0, channelId);
-                const status = newValue ? 'ENABLED' : 'DISABLED';
-                await interaction.editReply({ content: `✅ Forward deletion for this channel is now **${status}**.` });
+                await interaction.reply({ content: `✅ Forward deletion is now **${newValue ? 'ENABLED' : 'DISABLED'}**.`, ephemeral: true });
             
             } else if (subcommand === 'toggle_reverse_delete') {
                 const channelLink = db.prepare('SELECT allow_reverse_delete FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!channelLink) return interaction.editReply({ content: 'This channel is not a linked relay channel.' });
+                if (!channelLink) return interaction.reply({ content: 'This is not a linked relay channel.', ephemeral: true });
                 const newValue = !channelLink.allow_reverse_delete;
                 db.prepare('UPDATE linked_channels SET allow_reverse_delete = ? WHERE channel_id = ?').run(newValue ? 1 : 0, channelId);
-                const status = newValue ? 'ENABLED' : 'DISABLED';
-                await interaction.editReply({ content: `✅ Reverse deletion for this channel is now **${status}**.` });
+                await interaction.reply({ content: `✅ Reverse deletion is now **${newValue ? 'ENABLED' : 'DISABLED'}**.`, ephemeral: true });
             }
 
         } catch (error) {
            console.error(`Error in /relay ${subcommand}:`, error);
-           if (error.code === 10062) {
-               // A deferred interaction has expired. We can warn the user.
-               await interaction.editReply({ content: '❌ **Error:** This command took too long to respond. Please try again.' }).catch(() => {});
-           } else {
-               // For any other error, try to send a generic failure message.
+           if (interaction.deferred) {
                await interaction.editReply({ content: 'An unknown error occurred while executing this command.' }).catch(() => {});
+           } else if (!interaction.replied) {
+               await interaction.reply({ content: 'An unknown error occurred while executing this command.', ephemeral: true }).catch(() => {});
+           } else {
+               await interaction.followUp({ content: 'An unknown error occurred while executing this command.', ephemeral: true }).catch(() => {});
            }
         }
     },
