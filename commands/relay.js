@@ -44,7 +44,7 @@ module.exports = {
                         { name: 'Step 4: Managing Your Setup', value: '• `/relay list_servers`: See all servers in a group.\n' + '• `/relay list_mappings`: See all role mappings for a group.\n' + '• `/relay kick_server`: Forcibly remove a server from a group you own.\n' + '• `/relay delete_group`: Deletes a global group (owner only).\n' + '• `/relay toggle_reverse_delete`: Toggle if deleting a relayed message deletes the original.\n' + '• `/relay unlink_channel`: Removes only this channel from a relay.\n' + '• `/relay unmap_role`: Removes a role mapping.\n' + '• `/relay set_delete_delay`: Sets message auto-delete delay.\n' + '• `/version`, `/invite` & `/vote` : Get bot info.' }
                     )
                     .setFooter({ text: `RelayBot v${require('../package.json').version}` });
-                await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+                await interaction.editReply({ embeds: [helpEmbed] });
 
             } else if (subcommand === 'create_group') {
                 const groupName = interaction.options.getString('name');
