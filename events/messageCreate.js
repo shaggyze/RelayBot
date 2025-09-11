@@ -3,6 +3,7 @@ const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quot
 const db = require('../db/database.js');
 
 const webhookCache = new Collection();
+const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MB Discord limit for bots/webhooks
 
 module.exports = {
     name: Events.MessageCreate,
@@ -33,9 +34,9 @@ module.exports = {
             console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
             return;
         }
-        
-        console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
 
+        console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+        
         const senderName = message.member?.displayName ?? message.author.username;
         const username = `${senderName} (${message.guild.name})`;
         const avatarURL = message.author.displayAvatarURL();
@@ -48,6 +49,17 @@ module.exports = {
                 replyContent = blockQuote(quote(`${repliedAuthorName}: ${repliedMessage.content.substring(0, 200)}`)) + '\n';
             } catch {
                 replyContent = blockQuote(quote(`Replying to a deleted or inaccessible message.`)) + '\n';
+            }
+        }
+        
+        // [NEW] Proactively check for attachments that are too large.
+        const safeFiles = [];
+        const largeFiles = [];
+        for (const attachment of message.attachments.values()) {
+            if (attachment.size > MAX_FILE_SIZE) {
+                largeFiles.push(attachment.name);
+            } else {
+                safeFiles.push(attachment.url);
             }
         }
 
@@ -63,6 +75,7 @@ module.exports = {
                 for (const mention of roleMentions) {
                     const sourceRoleId = mention.match(/\d+/)[0];
                     const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
+                    
                     if (!roleMap) {
                         console.log(`[ROLES] Role ID ${sourceRoleId} has no mapping in this group. Skipping.`);
                         continue;
@@ -91,12 +104,18 @@ module.exports = {
             }
             
             let finalContent = replyContent + targetContent;
+            
+            // Add the warning message if any files were too large.
+            if (largeFiles.length > 0) {
+                const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large to be relayed: ${largeFiles.join(', ')})*`;
+                finalContent += fileNotice;
+            }
 
             const payload = {
                 content: finalContent,
                 username: username,
                 avatarURL: avatarURL,
-                files: message.attachments.map(att => att.url),
+                files: safeFiles, // Send only the safe files
                 embeds: message.embeds,
                 allowedMentions: { parse: ['roles'], repliedUser: false }
             };
@@ -117,25 +136,21 @@ module.exports = {
             } catch (error) {
                 if (error.code === 50006 && message.stickers.size > 0) {
                     console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
-                    
                     try {
                         const sticker = message.stickers.first();
                         const fallbackPayload = payload;
                         delete fallbackPayload.stickers;
                         fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-
                         const webhookClient = new WebhookClient({ url: target.webhook_url });
                         const relayedMessage = await webhookClient.send(fallbackPayload);
                         
                         console.log(`[RELAY] SUCCESS (Fallback): Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
-                
+
                         db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
                           .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
-
                     } catch (fallbackError) {
                         console.error(`[RELAY] FAILED on fallback attempt for message ${message.id} to channel ${target.channel_id}:`, fallbackError);
                     }
-
                 } else if (error.code === 10015) {
                     console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                     db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
