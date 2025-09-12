@@ -37,27 +37,50 @@ module.exports = {
             if (subcommand === 'list_groups') {
                 await interaction.deferReply({ ephemeral: true });
 
-                const allGroups = db.prepare('SELECT group_name, owner_guild_id FROM relay_groups ORDER BY group_name ASC').all();
+                const allGroups = db.prepare(`
+                    SELECT 
+                        rg.group_id, 
+                        rg.group_name, 
+                        rg.owner_guild_id,
+                        SUM(gs.character_count) as total_chars,
+                        COUNT(DISTINCT gs.day) as active_days
+                    FROM relay_groups rg
+                    LEFT JOIN group_stats gs ON rg.group_id = gs.group_id
+                    GROUP BY rg.group_id
+                    ORDER BY rg.group_name ASC
+                `).all();
 
                 if (allGroups.length === 0) {
                     return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
                 }
 
-                const descriptions = [];
                 let currentDescription = '';
-
                 for (const group of allGroups) {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
-                    const ownerInfo = ownerGuild ? `${ownerGuild.name} (\`${group.owner_guild_id}\`)` : `Unknown Server (\`${group.owner_guild_id}\`)`;
-                    const line = `• **${group.group_name}** (Owner: ${ownerInfo})\n`;
-                    
-                    if (currentDescription.length + line.length > 4000) {
-                        descriptions.push(currentDescription);
-                        currentDescription = '';
-                    }
+                    const ownerInfo = ownerGuild ? `${ownerGuild.name}` : `Unknown Server`;
+                
+                    const totalChars = group.total_chars || 0;
+                    // Calculate daily average, avoiding division by zero.
+                    const dailyAvg = (group.active_days > 0) ? (totalChars / group.active_days).toFixed(2) : 0;
+                
+                    const line = `• **${group.group_name}** (Owner: ${ownerInfo})\n` +
+                             `  └─ *Stats: ${totalChars.toLocaleString()} total chars / ${dailyAvg.toLocaleString()} daily avg.*\n`;
+                
                     currentDescription += line;
                 }
-                descriptions.push(currentDescription);
+
+                // Simple pagination for now, can be improved if needed
+                const descriptions = [];
+                const lines = currentDescription.split('\n');
+                let page = '';
+                for (const line of lines) {
+                    if (page.length + line.length > 4000) {
+                        descriptions.push(page);
+                        page = '';
+                    }
+                    page += line + '\n';
+                }
+                descriptions.push(page);
 
                 const embeds = descriptions.map((desc, index) => {
                     return new EmbedBuilder()

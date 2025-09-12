@@ -133,6 +133,19 @@ module.exports = {
                 db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
+                // [NEW] Add the character logging logic here.
+                const today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+                const messageLength = (message.content || '').length;
+
+                if (messageLength > 0) {
+                    db.prepare(`
+                        INSERT INTO group_stats (group_id, day, character_count)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(group_id, day) DO UPDATE SET
+                        character_count = character_count + excluded.character_count
+                    `).run(sourceChannelInfo.group_id, today, messageLength);
+                }
+
             } catch (error) {
                 if (error.code === 50006 && message.stickers.size > 0) {
                     console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
