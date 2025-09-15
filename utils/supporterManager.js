@@ -10,7 +10,7 @@ let supporterIds = new Set();
 
 // Helper function to fetch a single file.
 function fetchFile(url) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         if (!url.startsWith('http')) {
             return resolve('');
         }
@@ -85,15 +85,11 @@ async function fetchSupporterIds() {
     ]);
 
     const combinedIds = new Set();
-
-    // [THE FIX] Process and count each list independently before combining.
     const patronList = patronData.split(/\s+/).filter(id => id.length > 0);
     const voterList = voterData.split(/\s+/).filter(line => line.length > 0);
-
     const patronCount = patronList.length;
     const voterCount = voterList.length;
 
-    // Now, add them to the Set for the bot's use.
     patronList.forEach(id => combinedIds.add(id));
     voterList.forEach(line => {
         const userId = line.split(',')[0];
@@ -101,8 +97,6 @@ async function fetchSupporterIds() {
     });
     
     supporterIds = combinedIds;
-    
-    // The log now uses the independent counts for accuracy.
     console.log(`[Supporters] Successfully loaded ${patronCount} patrons and ${voterCount} active voters. Total unique supporters: ${supporterIds.size}`);
 }
 
@@ -110,7 +104,10 @@ function isSupporter(userId) {
     return supporterIds.has(userId);
 }
 
+// [THE DEFINITIVE FIX IS HERE]
+// We are exporting the new function so that other files can access the supporter list.
 module.exports = {
     fetchSupporterIds,
-    isSupporter
+    isSupporter,
+    getSupporterSet: () => supporterIds
 };
