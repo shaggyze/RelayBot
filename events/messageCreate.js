@@ -9,7 +9,6 @@ const webhookCache = new Collection();
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
 const RATE_LIMIT_CHARS = 200000;
-const RESET_HOUR_UTC = 19;
 
 // [NEW] A more robust way to check if a group has a supporter, avoiding cache issues.
 async function checkGroupForSupporters(client, groupId) {
