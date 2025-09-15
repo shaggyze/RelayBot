@@ -1,18 +1,20 @@
 // events/messageCreate.js
 const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quote } = require('discord.js');
 const db = require('../db/database.js');
+const { createVoteMessage } = require('../utils/voteEmbed.js');
+const { isSupporter } = require('../utils/supporterManager.js');
 
 const webhookCache = new Collection();
-const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8 MB Discord limit for bots/webhooks
+const MAX_FILE_SIZE = 8 * 1024 * 1024;
+const MAX_USERNAME_LENGTH = 80;
+const RATE_LIMIT_CHARS = 200000;
+const RESET_HOUR_UTC = 19; // 19:00 UTC is Noon Las Vegas time
 
 module.exports = {
     name: Events.MessageCreate,
     async execute(message) {
         if (message.author.bot || !message.guild) return;
-
-        if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) {
-            return;
-        }
+        if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 
         const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
         if (!sourceChannelInfo) return;
@@ -23,13 +25,64 @@ module.exports = {
             db.prepare('DELETE FROM linked_channels WHERE group_id = ?').run(sourceChannelInfo.group_id);
             return;
         }
+        
+        // --- [THE DEFINITIVE FIX] RATE LIMITING GATEKEEPER ---
+        // This function calculates the "day" based on our 19:00 UTC reset time.
+        const now = new Date();
+        const adjustedDate = new Date(now.getTime() - (RESET_HOUR_UTC * 60 * 60 * 1000));
+        const rateLimitDayString = adjustedDate.toISOString().slice(0, 10);
 
+        let stats = db.prepare('SELECT * FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
+        if (!stats) {
+            db.prepare('INSERT INTO group_stats (group_id, day) VALUES (?, ?)').run(sourceChannelInfo.group_id, rateLimitDayString);
+            stats = { character_count: 0, warning_sent_at: null };
+        }
+        
+        const messageLength = (message.content || '').length;
+
+        const allChannelsInGroup = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+        let isSupporterGroup = false;
+        for (const channel of allChannelsInGroup) {
+            const guild = message.client.guilds.cache.get(channel.guild_id);
+            if (guild && guild.members.cache.some(member => !member.user.bot && isSupporter(member.id))) {
+                isSupporterGroup = true;
+                break;
+            }
+        }
+        
+        if (!isSupporterGroup && stats.character_count + messageLength > RATE_LIMIT_CHARS) {
+            if (!stats.warning_sent_at) {
+                console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" (ID: ${sourceChannelInfo.group_id}) has exceeded the daily character limit.`);
+                const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                
+                const nextResetTime = new Date();
+                nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
+                if (now > nextResetTime) {
+                    nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1);
+                }
+                const resetTimestamp = Math.floor(nextResetTime.getTime() / 1000);
+                const timerString = `<t:${resetTimestamp}:R>`;
+
+                const warningPayload = createVoteMessage();
+                warningPayload.username = 'RelayBot Rate Limit';
+                warningPayload.avatarURL = message.client.user.displayAvatarURL();
+                warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused for this group. It will automatically resume ${timerString} or when a supporter joins.`;
+                
+                for (const target of allTargetChannels) {
+                    try {
+                        const webhookClient = new WebhookClient({ url: target.webhook_url });
+                        await webhookClient.send(warningPayload);
+                    } catch { /* Ignore failures */ }
+                }
+                db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
+            }
+            return;
+        }
+        // --- END OF RATE LIMITING ---
+
+        // This is the start of the normal relay logic
         console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
-
-        const targetChannels = db.prepare(
-            `SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`
-        ).all(sourceChannelInfo.group_id, message.channel.id);
-
+        const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
         if (targetChannels.length === 0) {
             console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
             return;
@@ -38,7 +91,11 @@ module.exports = {
         console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
         
         const senderName = message.member?.displayName ?? message.author.username;
-        const username = `${senderName} (${message.guild.name})`;
+        let username = `${senderName} (${message.guild.name})`;
+        if (username.length > MAX_USERNAME_LENGTH) {
+            username = username.substring(0, MAX_USERNAME_LENGTH - 3) + '...';
+        }
+        
         const avatarURL = message.author.displayAvatarURL();
         
         let replyContent = '';
@@ -52,23 +109,19 @@ module.exports = {
             }
         }
         
-        // [NEW] Proactively check for attachments that are too large.
         const safeFiles = [];
         const largeFiles = [];
-        for (const attachment of message.attachments.values()) {
-            if (attachment.size > MAX_FILE_SIZE) {
-                largeFiles.push(attachment.name);
-            } else {
-                safeFiles.push(attachment.url);
-            }
-        }
+        message.attachments.forEach(att => {
+            if (att.size > MAX_FILE_SIZE) largeFiles.push(att.name);
+            else safeFiles.push(att.url);
+        });
 
         for (const target of targetChannels) {
             const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
             console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
-            
+
             let targetContent = message.content;
-            
+
             const roleMentions = targetContent.match(/<@&(\d+)>/g);
             if (roleMentions) {
                 console.log(`[ROLES] Found ${roleMentions.length} role mention(s). Processing for target guild ${target.guild_id}.`);
@@ -104,18 +157,15 @@ module.exports = {
             }
             
             let finalContent = replyContent + targetContent;
-            
-            // Add the warning message if any files were too large.
             if (largeFiles.length > 0) {
-                const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large to be relayed: ${largeFiles.join(', ')})*`;
-                finalContent += fileNotice;
+                finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large to be relayed: ${largeFiles.join(', ')})*`;
             }
 
             const payload = {
                 content: finalContent,
                 username: username,
                 avatarURL: avatarURL,
-                files: safeFiles, // Send only the safe files
+                files: safeFiles,
                 embeds: message.embeds,
                 allowedMentions: { parse: ['roles'], repliedUser: false }
             };
@@ -133,17 +183,11 @@ module.exports = {
                 db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
-                // [NEW] Add the character logging logic here.
-                const today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
-                const messageLength = (message.content || '').length;
-
                 if (messageLength > 0) {
                     db.prepare(`
-                        INSERT INTO group_stats (group_id, day, character_count)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(group_id, day) DO UPDATE SET
-                        character_count = character_count + excluded.character_count
-                    `).run(sourceChannelInfo.group_id, today, messageLength);
+                        UPDATE group_stats SET character_count = character_count + ?
+                        WHERE group_id = ? AND day = ?
+                    `).run(messageLength, sourceChannelInfo.group_id, today);
                 }
 
             } catch (error) {
