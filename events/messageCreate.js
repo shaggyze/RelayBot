@@ -3,6 +3,7 @@ const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quot
 const db = require('../db/database.js');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { isSupporter } = require('../utils/supporterManager.js');
+const { getRateLimitDayString, RESET_HOUR_UTC } = require('../utils/time.js'); // [NEW]
 
 const webhookCache = new Collection();
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
@@ -43,7 +44,7 @@ module.exports = {
         
         const now = new Date();
         const adjustedDate = new Date(now.getTime() - (RESET_HOUR_UTC * 60 * 60 * 1000));
-        const rateLimitDayString = adjustedDate.toISOString().slice(0, 10);
+        const rateLimitDayString = getRateLimitDayString(); // [THE FIX]
         const messageLength = (message.content || '').length;
         const today = new Date().toISOString().slice(0, 10);
 

@@ -1,6 +1,7 @@
 // commands/owner.js
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const db = require('../db/database.js');
+const { getRateLimitDayString } = require('../utils/time.js'); // [NEW]
 
 const BOT_OWNER_ID = '182938628643749888';
 
@@ -36,31 +37,24 @@ module.exports = {
             if (subcommand === 'list_groups') {
                 await interaction.deferReply({ ephemeral: true });
 
-                // [THE FIX - PART 1] Get all-time stats for all groups.
                 const allGroups = db.prepare(`
                     SELECT 
-                        rg.group_id, 
-                        rg.group_name, 
-                        rg.owner_guild_id,
+                        rg.group_id, rg.group_name, rg.owner_guild_id,
                         SUM(gs.character_count) as total_chars,
                         COUNT(DISTINCT gs.day) as active_days
                     FROM relay_groups rg
                     LEFT JOIN group_stats gs ON rg.group_id = gs.group_id
-                    GROUP BY rg.group_id
-                    ORDER BY rg.group_name ASC
+                    GROUP BY rg.group_id ORDER BY rg.group_name ASC
                 `).all();
 
                 if (allGroups.length === 0) {
                     return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
                 }
 
-                // [THE FIX - PART 2] Get just today's stats for efficiency.
-                const today = new Date().toISOString().slice(0, 10);
-                const todaysStatsRaw = db.prepare('SELECT group_id, character_count FROM group_stats WHERE day = ?').all(today);
-                // Convert to a Map for quick lookups.
-                const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, stat.character_count]));
+                const today = getRateLimitDayString();
+                const todaysStatsRaw = db.prepare('SELECT group_id, character_count, warning_sent_at FROM group_stats WHERE day = ?').all(today);
+                const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, { count: stat.character_count, paused: !!stat.warning_sent_at }]));
 
-                // Paginate the output in case the list is very long.
                 const descriptions = [];
                 let currentDescription = '';
 
@@ -68,12 +62,24 @@ module.exports = {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
                     const ownerInfo = ownerGuild ? ownerGuild.name : `Unknown Server`;
                     
-                    // [THE FIX - PART 3] Calculate and format the stats.
-                    const todaysChars = todaysStatsMap.get(group.group_id) || 0;
+                    const todaysStats = todaysStatsMap.get(group.group_id) || { count: 0, paused: false };
+                    const isPaused = todaysStats.paused;
                     const totalChars = group.total_chars || 0;
+                    
+                    // [THE FIX] Add the third state for inactive (red) groups.
+                    let statusEmoji;
+                    if (isPaused) {
+                        statusEmoji = '🟡'; // Paused (rate-limited)
+                    } else if (totalChars === 0) {
+                        statusEmoji = '🔴'; // Inactive (zero total usage)
+                    } else {
+                        statusEmoji = '🟢'; // Active
+                    }
+                    
+                    const todaysChars = todaysStats.count;
                     const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
 
-                    const groupLine = `• **${group.group_name}** (Owner: ${ownerInfo})\n`;
+                    const groupLine = `${statusEmoji} **${group.group_name}** (Owner: ${ownerInfo})\n`;
                     const statsLine = `  └─ *Stats: ${todaysChars.toLocaleString()} today / ${totalChars.toLocaleString()} total / ${dailyAvg.toLocaleString()} avg.*\n`;
                     
                     const fullLine = groupLine + statsLine;
@@ -92,7 +98,7 @@ module.exports = {
                         .setColor('#FFD700')
                         .setDescription(desc)
                         .setTimestamp()
-                        .setFooter({ text: `Total Groups: ${allGroups.length}` });
+                        .setFooter({ text: `Total Groups: ${allGroups.length} | 🟢 Active / 🟡 Paused / 🔴 Inactive` }); // Add a legend
                 });
 
                 await interaction.editReply({ embeds: [embeds[0]] });
