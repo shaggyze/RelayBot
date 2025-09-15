@@ -182,12 +182,17 @@ module.exports = {
                         if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageWebhooks)) continue;
                         const webhooks = await guild.fetchWebhooks();
                         for (const webhook of webhooks.values()) {
-                            if (webhook.name === 'RelayBot' && !allDbWebhooks.has(webhook.url)) {
+                            // [THE DEFINITIVE FIX]
+                            // Check if the webhook was created by our bot AND is not in our database.
+                            if (webhook.owner.id === interaction.client.user.id && !allDbWebhooks.has(webhook.url)) {
+                                console.log(`[PRUNE] Deleting orphaned webhook "${webhook.name}" (ID: ${webhook.id}) in server "${guild.name}".`);
                                 await webhook.delete('Pruning orphaned RelayBot webhook.');
                                 prunedWebhooks++;
                             }
                         }
-                    } catch {}
+                    } catch (err) {
+                        console.error(`[PRUNE] Could not prune webhooks in server "${guild.name}": ${err.message}`);
+                    }
                 }
 
                 // [THE FIX] Build the new, cleaner embed
