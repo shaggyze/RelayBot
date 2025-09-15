@@ -11,19 +11,19 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('list_groups')
-                .setDescription('Lists all global relay groups in the database.'))
+                .setDescription('Lists all global relay groups and their character usage stats.'))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('delete_group')
                 .setDescription('[DANGER] Forcibly deletes a global group and makes the bot leave the owner\'s server.')
-                .addStringOption(option =>
-                    option.setName('name')
-                        .setDescription('The exact name of the group to delete.')
-                        .setRequired(true)))
+                .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('prune_db')
-                .setDescription('Removes all data from servers where the bot is no longer a member.')),
+                .setDescription('Removes orphaned server data and optionally inactive groups/webhooks.')
+                .addBooleanOption(option =>
+                    option.setName('include_inactive')
+                        .setDescription('Also prune groups with zero character usage? (Default: False)'))),
     
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
@@ -133,42 +133,80 @@ module.exports = {
 
             } else if (subcommand === 'prune_db') {
                 await interaction.deferReply({ ephemeral: true });
+                const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
+                
+                let prunedGroups = 0, prunedLinks = 0, prunedMappings = 0, prunedWebhooks = 0;
+                const prunedGuilds = [];
 
-                const currentGuildIds = Array.from(interaction.client.guilds.cache.keys());
+                // --- 1. Prune Data from Orphaned Servers (Your Superior Logic Restored) ---
+                const currentGuildIds = new Set(interaction.client.guilds.cache.keys());
                 const groupOwners = db.prepare('SELECT DISTINCT owner_guild_id FROM relay_groups').all().map(r => r.owner_guild_id);
                 const linkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all().map(r => r.guild_id);
                 const mappedGuilds = db.prepare('SELECT DISTINCT guild_id FROM role_mappings').all().map(r => r.guild_id);
                 const uniqueDbGuildIds = [...new Set([...groupOwners, ...linkedGuilds, ...mappedGuilds])];
-                const guildsToPrune = uniqueDbGuildIds.filter(id => !currentGuildIds.includes(id));
+                const guildsToPrune = uniqueDbGuildIds.filter(id => id && !currentGuildIds.has(id));
 
-                if (guildsToPrune.length === 0) {
-                    return interaction.editReply({ content: 'Database is already clean. No orphaned server data found.' });
+                if (guildsToPrune.length > 0) {
+                    for (const guildId of guildsToPrune) {
+                        const groups = db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
+                        const links = db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
+                        const mappings = db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
+                        prunedGroups += groups.changes;
+                        prunedLinks += links.changes;
+                        prunedMappings += mappings.changes;
+                        prunedGuilds.push(guildId);
+                    }
                 }
 
-                let prunedGroups = 0;
-                let prunedLinks = 0;
-                let prunedMappings = 0;
-
-                for (const guildId of guildsToPrune) {
-                    const groups = db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
-                    const links = db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
-                    const mappings = db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
-                    prunedGroups += groups.changes;
-                    prunedLinks += links.changes;
-                    prunedMappings += mappings.changes;
+                // --- 2. Prune Inactive Groups (if requested) ---
+                if (includeInactive) {
+                    const inactiveGroups = db.prepare(`
+                        SELECT rg.group_id FROM relay_groups rg
+                        LEFT JOIN group_stats gs ON rg.group_id = gs.group_id
+                        GROUP BY rg.group_id
+                        HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0
+                    `).all();
+                    
+                    if (inactiveGroups.length > 0) {
+                        const idsToDelete = inactiveGroups.map(g => g.group_id);
+                        const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${idsToDelete.map(() => '?').join(',')})`);
+                        const result = stmt.run(...idsToDelete);
+                        prunedGroups += result.changes;
+                    }
                 }
 
+                // --- 3. Prune Orphaned Webhooks from Current Servers ---
+                const allDbWebhooks = new Set(db.prepare('SELECT webhook_url FROM linked_channels').all().map(r => r.webhook_url));
+                for (const guild of interaction.client.guilds.cache.values()) {
+                    try {
+                        if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageWebhooks)) continue;
+                        const webhooks = await guild.fetchWebhooks();
+                        for (const webhook of webhooks.values()) {
+                            if (webhook.name === 'RelayBot' && !allDbWebhooks.has(webhook.url)) {
+                                await webhook.delete('Pruning orphaned RelayBot webhook.');
+                                prunedWebhooks++;
+                            }
+                        }
+                    } catch {}
+                }
+
+                // [THE FIX] Build the new, cleaner embed
                 const resultsEmbed = new EmbedBuilder()
-                    .setTitle('Database Pruning Complete')
-                    .setColor('#ED4245')
-                    .setDescription(`Successfully removed data associated with **${guildsToPrune.length}** orphaned server(s).`)
+                    .setTitle('Database & Webhook Pruning Complete')
+                    .setColor('#5865F2')
+                    .setDescription(`Cleanup operation finished. Found and removed data for **${prunedGuilds.length}** orphaned server(s).`)
                     .addFields(
-                        { name: 'Orphaned Server IDs', value: `\`\`\`${guildsToPrune.join('\n') || 'None'}\`\`\`` },
-                        { name: 'Groups Deleted', value: prunedGroups.toString(), inline: true },
-                        { name: 'Channel Links Deleted', value: prunedLinks.toString(), inline: true },
-                        { name: 'Role Mappings Deleted', value: prunedMappings.toString(), inline: true }
+                        { name: 'Groups Deleted', value: `${prunedGroups}`, inline: true },
+                        { name: 'Channel Links Deleted', value: `${prunedLinks}`, inline: true },
+                        { name: 'Role Mappings Deleted', value: `${prunedMappings}`, inline: true },
+                        { name: 'Orphaned Webhooks Pruned', value: `${prunedWebhooks}`, inline: true }
                     )
                     .setTimestamp();
+                
+                // Only add the "Orphaned Server IDs" field if there are actually any to show.
+                if (prunedGuilds.length > 0) {
+                    resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${prunedGuilds.join('\n')}\`\`\`` });
+                }
                 
                 await interaction.editReply({ embeds: [resultsEmbed] });
             }

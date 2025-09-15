@@ -193,7 +193,7 @@ module.exports = {
 
             } catch (error) {
                 if (error.code === 50006 && message.stickers.size > 0) {
-                    console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
+                    console.log(`[WARN] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
                     try {
                         const sticker = message.stickers.first();
                         const fallbackPayload = payload;
