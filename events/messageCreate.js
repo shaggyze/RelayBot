@@ -3,26 +3,26 @@ const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quot
 const db = require('../db/database.js');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { isSupporter } = require('../utils/supporterManager.js');
-const { getRateLimitDayString, RESET_HOUR_UTC } = require('../utils/time.js'); // [NEW]
+const { getRateLimitDayString, RESET_HOUR_UTC } = require('../utils/time.js');
 
 const webhookCache = new Collection();
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
 const RATE_LIMIT_CHARS = 200000;
 
-// [NEW] A more robust way to check if a group has a supporter, avoiding cache issues.
 async function checkGroupForSupporters(client, groupId) {
+    const supporterIdList = require('../utils/supporterManager.js').getSupporterSet();
+    if (supporterIdList.size === 0) return false;
     const guildsInGroup = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId);
     for (const row of guildsInGroup) {
         try {
             const guild = await client.guilds.fetch(row.guild_id);
-            // This is a more reliable check that can fetch a specific member if needed.
-            if (guild.members.cache.some(m => !m.user.bot && isSupporter(m.id))) {
-                return true; // Found a supporter in the cache
+            for (const supporterId of supporterIdList) {
+                if (await guild.members.fetch(supporterId).catch(() => null)) return true;
             }
         } catch {}
     }
-    return false; // No supporters found
+    return false;
 }
 
 module.exports = {
@@ -41,45 +41,47 @@ module.exports = {
             return;
         }
         
-        const now = new Date();
-        const adjustedDate = new Date(now.getTime() - (RESET_HOUR_UTC * 60 * 60 * 1000));
-        const rateLimitDayString = getRateLimitDayString(); // [THE FIX]
+        const rateLimitDayString = getRateLimitDayString();
         const messageLength = (message.content || '').length;
-        const today = new Date().toISOString().slice(0, 10);
+        const today = getRateLimitDayString();
+		
+        // --- [THE DEFINITIVE FIX] ---
+        // STEP 1: Always log the character count, no matter what.
+        if (messageLength > 0) {
+            db.prepare(`
+                INSERT INTO group_stats (group_id, day, character_count) VALUES (?, ?, ?)
+                ON CONFLICT(group_id, day) DO UPDATE SET character_count = character_count + excluded.character_count
+            `).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
+        }
 
-        // --- [DEFINITIVE FIX] New Rate Limiting and Relay Logic ---
+        // STEP 2: Now, check the rate limit status and decide whether to relay.
         const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
-
-        if (!isSupporterGroup) {
-            // This entire block only runs for non-supporter groups.
-            const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString) 
-                        || { character_count: 0, warning_sent_at: null };
-            
-            // Check if the NEW message will push them over the limit.
-            if (stats.character_count + messageLength > RATE_LIMIT_CHARS) {
-                if (!stats.warning_sent_at) {
-                    // Send warning
-                    console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has exceeded the daily limit. Sending warning.`);
-                    const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
-                    const nextResetTime = new Date();
-                    nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
-                    if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
-                    const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
-                    const warningPayload = createVoteMessage();
-                    warningPayload.username = 'RelayBot';
-                    warningPayload.avatarURL = message.client.user.displayAvatarURL();
-                    warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
-                    for (const target of allTargetChannels) {
-                        try {
-                            const webhookClient = new WebhookClient({ url: target.webhook_url });
-                            await webhookClient.send(warningPayload);
-                        } catch {}
-                    }
-                    db.prepare('INSERT INTO group_stats (group_id, day, character_count, warning_sent_at) VALUES (?, ?, ?, ?) ON CONFLICT(group_id, day) DO UPDATE SET warning_sent_at = excluded.warning_sent_at').run(sourceChannelInfo.group_id, rateLimitDayString, stats.character_count, Date.now());
+        
+        // Fetch the STATS AFTER updating them to get the most current count.
+        const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
+        
+        if (!isSupporterGroup && stats.character_count > RATE_LIMIT_CHARS) {
+            if (!stats.warning_sent_at) {
+                console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
+                const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                const now = new Date();
+                const nextResetTime = new Date();
+                nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
+                if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
+                const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
+                const warningPayload = createVoteMessage();
+                warningPayload.username = 'RelayBot Rate Limit';
+                warningPayload.avatarURL = message.client.user.displayAvatarURL();
+                warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
+                for (const target of allTargetChannels) {
+                    try {
+                        const webhookClient = new WebhookClient({ url: target.webhook_url });
+                        await webhookClient.send(warningPayload);
+                    } catch {}
                 }
-                // CRITICAL: Stop the message from being relayed.
-                return;
+                db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
             }
+            return; // Stop the message from being relayed.
         }
 
         // --- If we are here, the message can be relayed. ---
