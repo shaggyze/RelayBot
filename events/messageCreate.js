@@ -31,6 +31,7 @@ module.exports = {
         const now = new Date();
         const adjustedDate = new Date(now.getTime() - (RESET_HOUR_UTC * 60 * 60 * 1000));
         const rateLimitDayString = adjustedDate.toISOString().slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10);
 
         let stats = db.prepare('SELECT * FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
         if (!stats) {
