@@ -1,5 +1,5 @@
 // commands/owner.js
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const db = require('../db/database.js');
 
 const BOT_OWNER_ID = '182938628643749888';
