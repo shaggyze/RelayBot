@@ -33,10 +33,10 @@ module.exports = {
         const subcommand = interaction.options.getSubcommand();
 
         try {
-            // [THE FIX] The command logic is now in a single, unbroken if/else if chain.
             if (subcommand === 'list_groups') {
                 await interaction.deferReply({ ephemeral: true });
 
+                // [THE FIX - PART 1] Get all-time stats for all groups.
                 const allGroups = db.prepare(`
                     SELECT 
                         rg.group_id, 
@@ -54,33 +54,37 @@ module.exports = {
                     return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
                 }
 
+                // [THE FIX - PART 2] Get just today's stats for efficiency.
+                const today = new Date().toISOString().slice(0, 10);
+                const todaysStatsRaw = db.prepare('SELECT group_id, character_count FROM group_stats WHERE day = ?').all(today);
+                // Convert to a Map for quick lookups.
+                const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, stat.character_count]));
+
+                // Paginate the output in case the list is very long.
+                const descriptions = [];
                 let currentDescription = '';
+
                 for (const group of allGroups) {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
-                    const ownerInfo = ownerGuild ? `${ownerGuild.name}` : `Unknown Server`;
-                
+                    const ownerInfo = ownerGuild ? ownerGuild.name : `Unknown Server`;
+                    
+                    // [THE FIX - PART 3] Calculate and format the stats.
+                    const todaysChars = todaysStatsMap.get(group.group_id) || 0;
                     const totalChars = group.total_chars || 0;
-                    // Calculate daily average, avoiding division by zero.
-                    const dailyAvg = (group.active_days > 0) ? (totalChars / group.active_days).toFixed(2) : 0;
-                
-                    const line = `• **${group.group_name}** (Owner: ${ownerInfo})\n` +
-                             `  └─ *Stats: ${totalChars.toLocaleString()} total chars / ${dailyAvg.toLocaleString()} daily avg.*\n`;
-                
-                    currentDescription += line;
-                }
+                    const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
 
-                // Simple pagination for now, can be improved if needed
-                const descriptions = [];
-                const lines = currentDescription.split('\n');
-                let page = '';
-                for (const line of lines) {
-                    if (page.length + line.length > 4000) {
-                        descriptions.push(page);
-                        page = '';
+                    const groupLine = `• **${group.group_name}** (Owner: ${ownerInfo})\n`;
+                    const statsLine = `  └─ *Stats: ${todaysChars.toLocaleString()} today / ${totalChars.toLocaleString()} total / ${dailyAvg.toLocaleString()} avg.*\n`;
+                    
+                    const fullLine = groupLine + statsLine;
+
+                    if (currentDescription.length + fullLine.length > 4000) {
+                        descriptions.push(currentDescription);
+                        currentDescription = '';
                     }
-                    page += line + '\n';
+                    currentDescription += fullLine;
                 }
-                descriptions.push(page);
+                descriptions.push(currentDescription);
 
                 const embeds = descriptions.map((desc, index) => {
                     return new EmbedBuilder()
