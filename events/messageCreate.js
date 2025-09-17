@@ -178,11 +178,11 @@ module.exports = {
                     if (message.stickers.size > 0) {
                         const sticker = message.stickers.first();
                         if (sticker && sticker.id) {
-                            payload.stickers = [sticker.id];
+                            //payload.stickers = [sticker.id];
                         }
                     }
                 } catch (stickerError) {
-                    console.error(`[STICKER-ERROR] A non-fatal error occurred while accessing sticker data for message ${message.id}. The sticker will not be relayed.`, stickerError);
+                    console.error(`[STICKER-ERROR] A non-fatal error occurred while accessing sticker data for message ${message.id}. Sticker will not be relayed.`, stickerError);
                 }
                 
                 let relayedMessage = null; // 1. Define the variable as null.
