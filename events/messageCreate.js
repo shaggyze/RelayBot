@@ -1,8 +1,8 @@
 // events/messageCreate.js
-const { Events, WebhookClient, Collection, PermissionFlagsBits, blockQuote, quote } = require('discord.js');
+const { Events, WebhookClient, Collection, PermissionFlagsBits, EmbedBuilder, blockQuote, quote } = require('discord.js'); // Added EmbedBuilder
 const db = require('../db/database.js');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
-const { isSupporter } = require('../utils/supporterManager.js');
+const { isSupporter, getSupporterSet } = require('../utils/supporterManager.js');
 const { getRateLimitDayString, RESET_HOUR_UTC } = require('../utils/time.js');
 
 const webhookCache = new Collection();
@@ -44,9 +44,7 @@ module.exports = {
         const rateLimitDayString = getRateLimitDayString();
         const messageLength = (message.content || '').length;
         const today = getRateLimitDayString();
-		
-        // --- [THE DEFINITIVE FIX] ---
-        // STEP 1: Always log the character count, no matter what.
+
         if (messageLength > 0) {
             db.prepare(`
                 INSERT INTO group_stats (group_id, day, character_count) VALUES (?, ?, ?)
@@ -54,13 +52,11 @@ module.exports = {
             `).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
         }
 
-        // STEP 2: Now, check the rate limit status and decide whether to relay.
         const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
         
-        // Fetch the STATS AFTER updating them to get the most current count.
         const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
         
-        if (!isSupporterGroup && stats.character_count > RATE_LIMIT_CHARS) {
+        if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
             if (!stats.warning_sent_at) {
                 console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
                 const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
@@ -81,12 +77,7 @@ module.exports = {
                 }
                 db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
             }
-            return; // Stop the message from being relayed.
-        }
-
-        // --- If we are here, the message can be relayed. ---
-        if (messageLength > 0) {
-            db.prepare(`INSERT INTO group_stats (group_id, day, character_count) VALUES (?, ?, ?) ON CONFLICT(group_id, day) DO UPDATE SET character_count = character_count + excluded.character_count`).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
+            return;
         }
 
         console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
@@ -106,14 +97,22 @@ module.exports = {
         
         const avatarURL = message.author.displayAvatarURL();
         
-        let replyContent = '';
+        // [THE FIX - PART 1] The new reply handling logic.
+        let replyEmbed = null;
         if (message.reference && message.reference.messageId) {
             try {
                 const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                 const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
-                replyContent = blockQuote(quote(`${repliedAuthorName}: ${repliedMessage.content.substring(0, 200)}`)) + '\n';
+                const repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
+                
+                replyEmbed = new EmbedBuilder()
+                    .setColor('#B0B8C6') // Neutral grey
+                    .setAuthor({ name: `Replying to ${repliedAuthorName}` })
+                    .setDescription(repliedContent);
             } catch {
-                replyContent = blockQuote(quote(`Replying to a deleted or inaccessible message.`)) + '\n';
+                replyEmbed = new EmbedBuilder()
+                    .setColor('#B0B8C6')
+                    .setDescription('*Replying to a deleted or inaccessible message.*');
             }
         }
         
@@ -125,7 +124,7 @@ module.exports = {
         });
 
         for (const target of targetChannels) {
-            const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
+            const targetChannelName = message.client.channels.cache.get(target.channel.id)?.name ?? target.channel_id;
             console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
 
             let targetContent = message.content;
@@ -164,7 +163,7 @@ module.exports = {
                 }
             }
             
-            let finalContent = replyContent + targetContent;
+            let finalContent = targetContent; // The main content no longer includes the blockquote.
             if (largeFiles.length > 0) {
                 finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large to be relayed: ${largeFiles.join(', ')})*`;
             }
@@ -174,9 +173,15 @@ module.exports = {
                 username: username,
                 avatarURL: avatarURL,
                 files: safeFiles,
-                embeds: message.embeds,
+                embeds: [], // Start with an empty array.
                 allowedMentions: { parse: ['roles'], repliedUser: false }
             };
+
+            // [THE FIX - PART 2] Add the embeds in the correct order.
+            if (replyEmbed) {
+                payload.embeds.push(replyEmbed); // Our new reply embed goes first.
+            }
+            payload.embeds.push(...message.embeds); // Then add any embeds from the original message.
 
             if (message.stickers.size > 0) {
                 payload.stickers = [message.stickers.first().id];
@@ -191,12 +196,7 @@ module.exports = {
                 db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
                   .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
 
-                if (messageLength > 0) {
-                    db.prepare(`
-                        UPDATE group_stats SET character_count = character_count + ?
-                        WHERE group_id = ? AND day = ?
-                    `).run(messageLength, sourceChannelInfo.group_id, today);
-                }
+                // This logic was duplicated from the top of the file and has been removed to prevent double-counting.
 
             } catch (error) {
                 if (error.code === 50006 && message.stickers.size > 0) {
