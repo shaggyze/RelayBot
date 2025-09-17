@@ -183,8 +183,13 @@ module.exports = {
             }
             payload.embeds.push(...message.embeds); // Then add any embeds from the original message.
 
+            // NEW, CORRECTED CODE
             if (message.stickers.size > 0) {
-                payload.stickers = [message.stickers.first().id];
+                const sticker = message.stickers.first();
+                // [THE FIX] Add a crucial safety check to ensure the sticker object exists before accessing its ID.
+                if (sticker && sticker.id) {
+                    payload.stickers = [sticker.id];
+                }
             }
 
             try {
