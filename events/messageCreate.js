@@ -57,10 +57,27 @@ module.exports = {
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
             
             if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
-                if (!stats.warning_sent_at) {
-                    // ... (rate limit warning logic)
+            if (!stats.warning_sent_at) {
+                console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
+                const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                const now = new Date();
+                const nextResetTime = new Date();
+                nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
+                if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
+                const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
+                const warningPayload = createVoteMessage();
+                warningPayload.username = 'RelayBot Rate Limit';
+                warningPayload.avatarURL = message.client.user.displayAvatarURL();
+                warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
+                for (const target of allTargetChannels) {
+                    try {
+                        const webhookClient = new WebhookClient({ url: target.webhook_url });
+                        await webhookClient.send(warningPayload);
+                    } catch {}
                 }
-                return;
+                db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
+            }
+            return;
             }
 
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
@@ -97,7 +114,36 @@ module.exports = {
                 let targetContent = message.content;
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);
                 if (roleMentions) {
-                    // Role mapping logic...
+                console.log(`[ROLES] Found ${roleMentions.length} role mention(s). Processing for target guild ${target.guild_id}.`);
+                for (const mention of roleMentions) {
+                    const sourceRoleId = mention.match(/\d+/)[0];
+                    const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
+                    
+                    if (!roleMap) {
+                        console.log(`[ROLES] Role ID ${sourceRoleId} has no mapping in this group. Skipping.`);
+                        continue;
+                    }
+
+                    let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
+                    
+                    if (!targetRole) {
+                        try {
+                            const targetGuild = await message.client.guilds.fetch(target.guild_id);
+                            if (targetGuild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                                const newRole = await targetGuild.roles.create({ name: roleMap.role_name, mentionable: true, reason: `Auto-created for message relay.` });
+                                db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(target.group_id, target.guild_id, roleMap.role_name, newRole.id);
+                                targetRole = { role_id: newRole.id };
+                            }
+                        } catch (creationError) {
+                            console.error(`[ROLES] FAILED to auto-create role "${roleMap.role_name}":`, creationError);
+                        }
+                    }
+                    
+                    if (targetRole) {
+                        console.log(`[ROLES] Mapping "${roleMap.role_name}" from ${sourceRoleId} to ${targetRole.role_id}.`);
+                        targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
+                    }
+                }
                 }
                 
                 let finalContent = targetContent;
@@ -141,7 +187,30 @@ module.exports = {
 
                 } catch (error) {
                     if (error.code === 50006 && payload.stickers && payload.stickers.length > 0) {
-                        // Sticker fallback logic...
+                        console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
+                    
+					    try {
+                            const sticker = message.stickers.first();
+                            const fallbackPayload = payload;
+                            delete fallbackPayload.stickers;
+                            // Add a space before the note for better formatting
+                            fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
+
+                            const webhookClient = new WebhookClient({ url: target.webhook_url });
+                        
+                            // [THE DEFINITIVE FIX]
+                            // We now correctly assign the result to the 'relayedMessage' variable.
+                            const relayedMessage = await webhookClient.send(fallbackPayload);
+                        
+                            console.log(`[RELAY] SUCCESS (Fallback): Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
+
+                            // This line will now work correctly.
+                            db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
+                              .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
+
+                        } catch (fallbackError) {
+                            console.error(`[RELAY] FAILED on fallback attempt for message ${message.id} to channel ${target.channel_id}:`, fallbackError);
+                        }
                     } else if (error.code === 10015) {
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
