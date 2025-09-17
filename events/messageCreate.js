@@ -66,7 +66,7 @@ module.exports = {
                 if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
                 const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
                 const warningPayload = createVoteMessage();
-                warningPayload.username = 'RelayBot Rate Limit';
+                warningPayload.username = 'RelayBot';
                 warningPayload.avatarURL = message.client.user.displayAvatarURL();
                 warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
                 for (const target of allTargetChannels) {
@@ -80,9 +80,15 @@ module.exports = {
             return;
             }
 
+            console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
-            if (targetChannels.length === 0) return;
+            if (targetChannels.length === 0) {
+                console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
+                return;
+            }
 
+            console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+        
             const senderName = message.member?.displayName ?? message.author.username;
             let username = `${senderName} (${message.guild.name})`;
             if (username.length > MAX_USERNAME_LENGTH) {
@@ -111,6 +117,8 @@ module.exports = {
             });
 
             for (const target of targetChannels) {
+                const targetChannelName = message.client.channels.cache.get(target.channel.id)?.name ?? target.channel_id;
+                console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
                 let targetContent = message.content;
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);
                 if (roleMentions) {
