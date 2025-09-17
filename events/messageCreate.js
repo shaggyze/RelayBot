@@ -183,14 +183,17 @@ module.exports = {
             }
             payload.embeds.push(...message.embeds); // Then add any embeds from the original message.
 
-            // NEW, CORRECTED CODE
-            if (message.stickers.size > 0) {
-                const sticker = message.stickers.first();
-                // [THE FIX] Add a crucial safety check to ensure the sticker object exists before accessing its ID.
-                if (sticker && sticker.id) {
-                    payload.stickers = [sticker.id];
+            try {
+                if (message.stickers.size > 0) {
+                    const sticker = message.stickers.first();
+                    if (sticker && sticker.id) { // Add a final safety check
+                        payload.stickers = [sticker.id];
+                    }
                 }
+            } catch (stickerError) {
+                console.error('[STICKER-ERROR] A critical error occurred while trying to access sticker data. The sticker will not be relayed.', stickerError);
             }
+            
 
             try {
                 const webhookClient = new WebhookClient({ url: target.webhook_url });
