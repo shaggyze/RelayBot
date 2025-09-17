@@ -78,10 +78,15 @@ module.exports = {
                 }
                 return;
             }
-
+            console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
-            if (targetChannels.length === 0) return;
+            if (targetChannels.length === 0) {
+                console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
+                return;
+            }
 
+            console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+        
             const senderName = message.member?.displayName ?? message.author.username;
             let username = `${senderName} (${message.guild.name})`;
             if (username.length > MAX_USERNAME_LENGTH) {
