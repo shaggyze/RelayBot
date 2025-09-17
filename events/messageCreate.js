@@ -134,7 +134,11 @@ module.exports = {
                 try {
                     const webhookClient = new WebhookClient({ url: target.webhook_url });
                     await webhookClient.send(payload);
-                    db.prepare('INSERT INTO relayed_messages ...').run(...);
+                    console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
+                
+                    db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
+                      .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
+
                 } catch (error) {
                     if (error.code === 50006 && payload.stickers && payload.stickers.length > 0) {
                         // Sticker fallback logic...
