@@ -202,8 +202,8 @@ module.exports = {
 
                     if (relayedMessage) {
                         console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id}`);
-                        db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
-                          .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
+                        db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
+                          .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
                     }
                 } catch (error) {
                     // This is the safety net for this specific target channel.
@@ -212,7 +212,7 @@ module.exports = {
                         console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
-                        console.error(`[RELAY-LOOP-ERROR] FAILED to process relay for target channel ${targetChannelName}. The bot will continue.`, error);
+                        console.error(`[RELAY-LOOP-ERROR] FAILED to process relay for target channel #${targetChannelName} (${target.channel_id}). The bot will continue. Error:`, error);
                     }
                 }
             }
