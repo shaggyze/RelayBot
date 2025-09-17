@@ -185,13 +185,16 @@ module.exports = {
 
             try {
                 if (message.stickers.size > 0) {
-                    const sticker = message.stickers.first();
-                    if (sticker && sticker.id) { // Add a final safety check
-                        payload.stickers = [sticker.id];
+                    // We iterate the collection to get the first sticker safely.
+                    for (const sticker of message.stickers.values()) {
+                        if (sticker && sticker.id) {
+                            payload.stickers = [sticker.id];
+                        }
+                        break; // We only care about the first sticker.
                     }
                 }
             } catch (stickerError) {
-                console.error('[STICKER-ERROR] A critical error occurred while trying to access sticker data. The sticker will not be relayed.', stickerError);
+                console.error('[STICKER-ERROR] A critical error occurred while accessing sticker data. The sticker will not be relayed.', stickerError);
             }
             
 
