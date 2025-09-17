@@ -177,39 +177,23 @@ module.exports = {
                     console.error(`[STICKER-ERROR] A non-fatal error occurred while accessing sticker data for message ${message.id}. The sticker will not be relayed.`, stickerError);
                 }
                 
+                let relayedMessage = null; // 1. Define the variable as null.
+
                 try {
                     const webhookClient = new WebhookClient({ url: target.webhook_url });
-                    await webhookClient.send(payload);
-                    console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
-                
-                    db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
-                      .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
-
+                    relayedMessage = await webhookClient.send(payload); // 2. Try to assign it.
                 } catch (error) {
                     if (error.code === 50006 && payload.stickers && payload.stickers.length > 0) {
-                        console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
-                    
-					    try {
+                        try {
                             const sticker = message.stickers.first();
                             const fallbackPayload = payload;
                             delete fallbackPayload.stickers;
-                            // Add a space before the note for better formatting
                             fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-
                             const webhookClient = new WebhookClient({ url: target.webhook_url });
-                        
-                            // [THE DEFINITIVE FIX]
-                            // We now correctly assign the result to the 'relayedMessage' variable.
-                            const relayedMessage = await webhookClient.send(fallbackPayload);
-                        
-                            console.log(`[RELAY] SUCCESS (Fallback): Relayed message ${message.id} to new message ${relayedMessage.id} in group "${groupInfo.group_name}"`);
-
-                            // This line will now work correctly.
-                            db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
-                              .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
-
+                            // 2a. Also assign it in the fallback.
+                            relayedMessage = await webhookClient.send(fallbackPayload);
                         } catch (fallbackError) {
-                            console.error(`[RELAY] FAILED on fallback attempt for message ${message.id} to channel ${target.channel_id}:`, fallbackError);
+                            console.error(`[RELAY] FAILED on fallback for message ${message.id}:`, fallbackError);
                         }
                     } else if (error.code === 10015) {
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
@@ -217,9 +201,16 @@ module.exports = {
                         console.error(`[RELAY] FAILED to relay message to channel ${target.channel_id}:`, error);
                     }
                 }
+
+                // 3. Only run this code if the send was successful.
+                if (relayedMessage) {
+                    console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id}`);
+                    db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url) VALUES (?, ?, ?, ?, ?)')
+                      .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url);
+                }
             }
         } catch (error) {
-            console.error(`[FATAL-ERROR] A critical unhandled error occurred in the messageCreate event for message ${message.id}. The bot will not crash. Please report this!`, error);
+            console.error(`[FATAL-ERROR] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
         }
     },
 };
