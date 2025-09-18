@@ -115,7 +115,9 @@ module.exports = {
                         const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
 						const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
                         const repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
-                        
+                        if (repliedMessage.editedTimestamp) {
+                            repliedContent += ' *(edited)*';
+                        }
                         // Find the corresponding relayed message ID in THIS specific target channel.
                         const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?')
                             .get(repliedMessage.id, target.channel_id);

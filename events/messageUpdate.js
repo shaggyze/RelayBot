@@ -27,15 +27,17 @@ async function rebuildAndEdit(client, originalMessageId) {
         let replyEmbed = null;
         if (originalInfo.replied_to_id) {
             try {
-                // Find the ID of the message being replied to *in the target channel*
-                const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(originalInfo.replied_to_id, relayed.relayed_channel_id);
-                // Fetch the message content from the source channel, not the target
-                const repliedToMessage = await originalChannel.messages.fetch(originalInfo.replied_to_id);
+				// 1. Get the correct channel ID from the message reference.
+                const repliedToChannel = await client.channels.fetch(originalMessage.reference.channelId);
+                // 2. Fetch the message from that correct channel.
+                const repliedToMessage = await repliedToChannel.messages.fetch(originalMessage.reference.messageId);
                 
                 const repliedAuthorName = repliedToMessage.member?.displayName ?? repliedToMessage.author.username;
 				const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
                 const repliedContent = repliedToMessage.content ? repliedToMessage.content.substring(0, 1000) : '*(Message had no text content)*';
-                
+                if (repliedToMessage.editedTimestamp) {
+                    repliedContent += ' *(edited)*';
+                }
                 let messageLink = null;
                 if (relayedReplyInfo) {
                     messageLink = `https://discord.com/channels/${relayed.guild_id}/${relayed.relayed_channel_id}/${relayedReplyInfo.relayed_message_id}`;
