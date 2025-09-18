@@ -109,32 +109,40 @@ module.exports = {
             try {
                 // [THE FIX - PART 1] The reply embed logic is now INSIDE the loop.
                 let replyEmbed = null;
-                if (message.reference && message.reference.messageId) {
-                    try {
-                        const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
-                        const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
-						const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
-                        const repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
-                        if (repliedMessage.editedTimestamp) {
-                            repliedContent += ' *(edited)*';
+                    if (message.reference && message.reference.messageId) {
+                        let repliedMessage;
+                        try {
+                            // First, try to fetch the message. This is the only part that can fail.
+                            repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
+                        } catch {
+                            // If fetching fails, create the "inaccessible" embed and do nothing else.
+                            replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
                         }
-                        // Find the corresponding relayed message ID in THIS specific target channel.
-                        const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?')
-                            .get(repliedMessage.id, target.channel_id);
 
-                        let messageLink = null;
-                        if (relayedReplyInfo) {
-                            messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
+                        // This code only runs if the fetch was successful.
+                        if (repliedMessage) {
+                            const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
+                            const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
+                            let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
+                            if (repliedMessage.editedTimestamp) {
+                                repliedContent += ' *(edited)*';
+                            }
+                            
+                            // Now, safely perform the database lookup. This will not throw an error.
+                            const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(repliedMessage.id, target.channel_id);
+                            
+                            let messageLink = null; // Default to no link.
+                            if (relayedReplyInfo) {
+                                // If we found a corresponding message in the target channel, build the link.
+                                messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
+                            }
+                            
+                            replyEmbed = new EmbedBuilder()
+                                .setColor('#B0B8C6')
+                                .setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
+                                .setDescription(repliedContent);
                         }
-                        
-                        replyEmbed = new EmbedBuilder()
-                            .setColor('#B0B8C6')
-                            .setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
-                            .setDescription(repliedContent);
-                    } catch {
-                        replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
                     }
-                }
 
                 let targetContent = message.content;
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);
