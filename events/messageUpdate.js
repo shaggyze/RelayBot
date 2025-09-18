@@ -2,50 +2,60 @@
 const { Events, WebhookClient, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
 
-// This is a new, powerful helper function to rebuild a complete message payload from scratch.
+// This is the definitive, robust helper function to rebuild a message payload.
 async function rebuildAndEdit(client, originalMessageId) {
-    // Find the original message's details from the database
+    // 1. Get the original message's details from our database.
     const originalInfo = db.prepare('SELECT original_channel_id, replied_to_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(originalMessageId);
-    if (!originalInfo) return; // This message wasn't one we relayed.
-    
-    // Fetch the original message object from Discord
+    if (!originalInfo) return; // This message was not one we relayed.
+
+    // 2. Fetch the original message object itself from Discord.
     const originalChannel = await client.channels.fetch(originalInfo.original_channel_id).catch(() => null);
     if (!originalChannel) return;
     const originalMessage = await originalChannel.messages.fetch(originalMessageId).catch(() => null);
     if (!originalMessage) return;
 
-    // Rebuild the sender's identity
+    // 3. Rebuild the sender's identity.
     const senderName = originalMessage.member?.displayName ?? originalMessage.author.username;
     let username = `${senderName} (${originalMessage.guild.name})`;
     if (username.length > 80) username = username.substring(0, 77) + '...';
     const avatarURL = originalMessage.author.displayAvatarURL();
 
-    // Find all the copies of this message that need to be updated
+    // 4. Find all the copies of this message that we need to update.
     const copiesToUpdate = db.prepare('SELECT * FROM relayed_messages WHERE original_message_id = ?').all(originalMessageId);
 
+    // 5. Loop through each copy and build a custom payload for it.
     for (const relayed of copiesToUpdate) {
         let replyEmbed = null;
+        // Check if the original message was a reply.
         if (originalInfo.replied_to_id) {
+            let repliedToMessage;
             try {
-				// 1. Get the correct channel ID from the message reference.
-                const repliedToChannel = await client.channels.fetch(originalMessage.reference.channelId);
-                // 2. Fetch the message from that correct channel.
-                const repliedToMessage = await repliedToChannel.messages.fetch(originalMessage.reference.messageId);
-                
+                // Fetch the message that was replied to.
+                repliedToMessage = await client.channels.cache.get(originalInfo.original_channel_id)?.messages.fetch(originalInfo.replied_to_id);
+            } catch {
+                // If we can't fetch it, it was likely deleted.
+                replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
+            }
+
+            if (repliedToMessage) {
                 const repliedAuthorName = repliedToMessage.member?.displayName ?? repliedToMessage.author.username;
-				const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
-                const repliedContent = repliedToMessage.content ? repliedToMessage.content.substring(0, 1000) : '*(Message had no text content)*';
+                const repliedAuthorAvatar = repliedToMessage.author.displayAvatarURL();
+                let repliedContent = repliedToMessage.content ? repliedToMessage.content.substring(0, 1000) : '*(Message had no text content)*';
                 if (repliedToMessage.editedTimestamp) {
                     repliedContent += ' *(edited)*';
                 }
+                
+                // Now, find the link for THIS specific target channel.
+                const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(originalInfo.replied_to_id, relayed.relayed_channel_id);
                 let messageLink = null;
                 if (relayedReplyInfo) {
                     messageLink = `https://discord.com/channels/${relayed.guild_id}/${relayed.relayed_channel_id}/${relayedReplyInfo.relayed_message_id}`;
                 }
                 
-                replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
-            } catch {
-                replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
+                replyEmbed = new EmbedBuilder()
+                    .setColor('#B0B8C6')
+                    .setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
+                    .setDescription(repliedContent);
             }
         }
 
