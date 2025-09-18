@@ -95,18 +95,6 @@ module.exports = {
             
             const avatarURL = message.author.displayAvatarURL();
             
-            let replyEmbed = null;
-            if (message.reference && message.reference.messageId) {
-                try {
-                    const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
-                    const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
-                    const repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
-                    replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `Replying to ${repliedAuthorName}` }).setDescription(repliedContent);
-                } catch {
-                    replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
-                }
-            }
-            
             const safeFiles = [];
             const largeFiles = [];
             message.attachments.forEach(att => {
@@ -115,97 +103,82 @@ module.exports = {
             });
 
             for (const target of targetChannels) {
-                // [THE DEFINITIVE FIX]
-                // The entire logic for this single target is now wrapped in a try/catch block.
-                // This guarantees that a failure for one channel will not stop the others.
-                try {
-                    const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                    console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
-                    
-                    let targetContent = message.content;
-                    const roleMentions = targetContent.match(/<@&(\d+)>/g);
-                    if (roleMentions) {
-                        console.log(`[ROLES] Found ${roleMentions.length} role mention(s). Processing for target guild ${target.guild_id}.`);
-                        for (const mention of roleMentions) {
-                            const sourceRoleId = mention.match(/\d+/)[0];
-                            const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
-                    
-                            if (!roleMap) {
-                                console.log(`[ROLES] Role ID ${sourceRoleId} has no mapping in this group. Skipping.`);
-                                continue;
-                            }
-
-                            let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
-                    
-                            if (!targetRole) {
-                                try {
-                                    const targetGuild = await message.client.guilds.fetch(target.guild_id);
-                                        if (targetGuild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) {
-                                        const newRole = await targetGuild.roles.create({ name: roleMap.role_name, mentionable: true, reason: `Auto-created for message relay.` });
-                                        db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(target.group_id, target.guild_id, roleMap.role_name, newRole.id);
-                                           targetRole = { role_id: newRole.id };
-                                    }
-                                } catch (creationError) {
-                                    console.error(`[ROLES] FAILED to auto-create role "${roleMap.role_name}":`, creationError);
-                                }
-                            }
-                    
-                            if (targetRole) {
-                                console.log(`[ROLES] Mapping "${roleMap.role_name}" from ${sourceRoleId} to ${targetRole.role_id}.`);
-                                targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
-                            }
-                        }
-				    }
-
-                    let finalContent = targetContent;
-                    if (largeFiles.length > 0) {
-                        finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large...)*`;
-                    }
-
-                    const payload = {
-                        content: finalContent,
-                        username: username,
-                        avatarURL: avatarURL,
-                        files: safeFiles,
-                        embeds: [],
-                        allowedMentions: { parse: ['roles'], repliedUser: false }
-                    };
-
-                    if (replyEmbed) payload.embeds.push(replyEmbed);
-                    payload.embeds.push(...message.embeds);
-
-                    if (message.stickers.size > 0) {
-                        const sticker = message.stickers.first();
-                        if (sticker && sticker.id) {
-                            payload.stickers = [sticker.id];
-                        }
-                    }
-                    
-                    let relayedMessage = null;
+            const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
+            console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
+            
+            try {
+                // [THE FIX - PART 1] The reply embed logic is now INSIDE the loop.
+                let replyEmbed = null;
+                if (message.reference && message.reference.messageId) {
                     try {
-                        const webhookClient = new WebhookClient({ url: target.webhook_url });
-                        relayedMessage = await webhookClient.send(payload);
-                    } catch (sendError) {
-                        if (sendError.code === 50006 && payload.stickers && payload.stickers.length > 0) {
-                            const sticker = message.stickers.first();
-                            if (sticker && sticker.name) {
-                                const fallbackPayload = payload;
-                                delete fallbackPayload.stickers;
-                                fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-                                const webhookClient = new WebhookClient({ url: target.webhook_url });
-                                relayedMessage = await webhookClient.send(fallbackPayload);
-                            }
-                        } else {
-                            throw sendError; // Re-throw other send errors to be caught by the outer block.
+                        const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
+                        const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
+						const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
+                        const repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
+                        
+                        // Find the corresponding relayed message ID in THIS specific target channel.
+                        const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?')
+                            .get(repliedMessage.id, target.channel_id);
+
+                        let messageLink = null;
+                        if (relayedReplyInfo) {
+                            messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
+                        }
+                        
+                        replyEmbed = new EmbedBuilder()
+                            .setColor('#B0B8C6')
+                            .setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
+                            .setDescription(repliedContent);
+                    } catch {
+                        replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
+                    }
+                }
+
+                let targetContent = message.content;
+                const roleMentions = targetContent.match(/<@&(\d+)>/g);
+                if (roleMentions) {
+                    // Role mapping logic... (This part is correct)
+                    for (const mention of roleMentions) {
+                        const sourceRoleId = mention.match(/\d+/)[0];
+                        const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
+                        if (!roleMap) continue;
+                        let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
+                        if (targetRole) {
+                            targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
                         }
                     }
+                }
+                
+                let finalContent = targetContent;
+                if (largeFiles.length > 0) {
+                    finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large...)*`;
+                }
 
-                    if (relayedMessage) {
-                        console.log(`[RELAY] SUCCESS: Relayed message ${message.id} to new message ${relayedMessage.id}`);
-                        db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
-                          .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
-                    }
-                } catch (error) {
+                const payload = {
+                    content: finalContent,
+                    username: username,
+                    avatarURL: avatarURL,
+                    files: safeFiles,
+                    embeds: [],
+                    allowedMentions: { parse: ['roles'], repliedUser: false }
+                };
+
+                if (replyEmbed) payload.embeds.push(replyEmbed);
+                payload.embeds.push(...message.embeds);
+
+                if (message.stickers.size > 0) {
+                    const sticker = message.stickers.first();
+                    if (sticker && sticker.id) payload.stickers = [sticker.id];
+                }
+                
+                // [THE FIX - PART 2] The database insert MUST happen AFTER the webhook send.
+                const webhookClient = new WebhookClient({ url: target.webhook_url });
+                const relayedMessage = await webhookClient.send(payload);
+
+                db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
+                  .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
+
+            } catch (error) {
                     // This is the safety net for this specific target channel.
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
                     if (error.code === 10015) {

@@ -51,6 +51,14 @@ module.exports = {
                     return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
                 }
 
+                // First, create a set of all guild IDs that contain at least one supporter.
+                const supporterGuilds = new Set();
+                for (const guild of interaction.client.guilds.cache.values()) {
+                    if (guild.members.cache.some(member => !member.user.bot && isSupporter(member.id))) {
+                        supporterGuilds.add(guild.id);
+                    }
+                }
+
                 const today = getRateLimitDayString();
                 const todaysStatsRaw = db.prepare('SELECT group_id, character_count, warning_sent_at FROM group_stats WHERE day = ?').all(today);
                 const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, { count: stat.character_count, paused: !!stat.warning_sent_at }]));
@@ -65,21 +73,26 @@ module.exports = {
                     const todaysStats = todaysStatsMap.get(group.group_id) || { count: 0, paused: false };
                     const isPaused = todaysStats.paused;
                     const totalChars = group.total_chars || 0;
+
+                    // Check if any of the guilds linked to this group are in our supporter set.
+                    const linkedGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(r => r.guild_id);
+                    const isSupporterGroup = linkedGuildIds.some(id => supporterGuilds.has(id));
                     
-                    // [THE FIX] Add the third state for inactive (red) groups.
                     let statusEmoji;
                     if (isPaused) {
-                        statusEmoji = '🟡'; // Paused (rate-limited)
+                        statusEmoji = '🟡';
                     } else if (totalChars === 0) {
-                        statusEmoji = '🔴'; // Inactive (zero total usage)
+                        statusEmoji = '🔴';
                     } else {
-                        statusEmoji = '🟢'; // Active
+                        statusEmoji = '🟢';
                     }
+                    
+                    const star = isSupporterGroup ? '⭐' : '';
                     
                     const todaysChars = todaysStats.count;
                     const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
-
-                    const groupLine = `${statusEmoji} **${group.group_name}** (Owner: ${ownerInfo})\n`;
+                    
+                    const groupLine = `${statusEmoji} ${star} **${group.group_name}** (Owner: ${ownerInfo})\n`;
                     const statsLine = `  └─ *Stats: ${todaysChars.toLocaleString()} today / ${totalChars.toLocaleString()} total / ${dailyAvg.toLocaleString()} avg.*\n`;
                     
                     const fullLine = groupLine + statsLine;
@@ -98,7 +111,7 @@ module.exports = {
                         .setColor('#FFD700')
                         .setDescription(desc)
                         .setTimestamp()
-                        .setFooter({ text: `Total Groups: ${allGroups.length} | 🟢 Active / 🟡 Paused / 🔴 Inactive` }); // Add a legend
+                        .setFooter({ text: `Total Groups: ${allGroups.length} | 🟢 Active / 🟡 Paused / 🔴 Inactive | ⭐ Supporter Group` });
                 });
 
                 await interaction.editReply({ embeds: [embeds[0]] });
