@@ -1,9 +1,24 @@
 // events/ready.js
-const { Events, ActivityType, WebhookClient } = require('discord.js');
+const { Events, ActivityType, WebhookClient, ChannelType } = require('discord.js');
 const db = require('../db/database.js');
 const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
-const { fetchSupporterIds, isSupporter, getSupporterSet } = require('../utils/supporterManager.js'); // Import getSupporterSet
+const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
+
+async function primeMemberCache(client) {
+    console.log('[Cache] Starting background member cache priming for all guilds...');
+    const guilds = Array.from(client.guilds.cache.values());
+    for (const guild of guilds) {
+        try {
+            console.log(`[Cache] Fetching members for "${guild.name}"...`);
+            await guild.members.fetch();
+            console.log(`[Cache] Successfully cached members for "${guild.name}".`);
+        } catch (error) {
+            console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). This may be due to API load or missing permissions. The daily task will rely on a partial cache for this guild. Error: ${error.message}`);
+        }
+    }
+    console.log('[Cache] Background member cache priming complete.');
+}
 
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
@@ -12,33 +27,62 @@ async function runDailyVoteReminder(client) {
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
     
-    const supporterIdList = getSupporterSet();
     const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
-    if (allLinkedGuilds.length === 0) return;
+    if (allLinkedGuilds.length === 0) {
+        console.log('[Tasks] No linked guilds found. Task finished.');
+        return;
+    }
 
     console.log(`[Tasks] Checking ${allLinkedGuilds.length} unique server(s) for supporters...`);
+    
     const guildsWithoutSupporters = new Set();
 
     for (const guildInfo of allLinkedGuilds) {
-        let supporterFound = false;
-        const guild = await client.guilds.fetch(guildInfo.guild_id).catch(() => null);
-        if (!guild) continue;
+        let hasSupporter = false;
+        let guild; // Define guild in the outer scope so the catch block can access it
 
-        // [THE DEFINITIVE FIX] Use the memory-efficient "Supporter-First" check.
-        // This makes a few small, fast requests instead of one huge, memory-intensive request.
-        for (const supporterId of supporterIdList) {
-            if (await guild.members.fetch(supporterId).catch(() => null)) {
-                supporterFound = true;
-                break; // Found one, no need to check other supporters for this guild.
+        try {
+            guild = await client.guilds.fetch(guildInfo.guild_id);
+            if (!guild) {
+                // This case should be caught by the error handler below, but it's good practice.
+                continue;
             }
+
+            const members = await guild.members.fetch({ time: 120000 }); // Keep the 2-minute timeout
+            hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
+            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+
+        } catch (error) {
+            const guildId = guildInfo.guild_id;
+            const guildName = guild ? guild.name : `Unknown Guild (${guildId})`;
+
+            // [NEW AUTO-CLEANUP LOGIC]
+            // DiscordAPIError code 10004 is "Unknown Guild".
+            if (error.code === 10004) {
+                console.warn(`[Tasks] [AUTO-CLEANUP] Guild ${guildId} is unknown (bot was likely kicked or server deleted). Pruning all associated data from the database.`);
+                db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
+                db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
+                db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
+                // Since we've cleaned up, there's nothing more to do with this guild in this loop.
+                continue; // This skips the hasSupporter check and sending logic for this iteration.
+            }
+            
+            // Keep the existing timeout handling.
+            if (error.code === 'GuildMembersTimeout') {
+                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time. Skipping this server as a precaution.`);
+            } else {
+                console.error(`[Tasks] [ERROR] FAILED to process guild "${guildName}". Error: ${error.message}`);
+            }
+            
+            // As a safety measure, we will assume a supporter is present and skip this guild if we can't check it properly.
+            hasSupporter = true;
         }
-        
-        console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Does it contain a supporter? -> ${supporterFound}`);
-        
-        if (!supporterFound) {
-            guildsWithoutSupporters.add(guild.id);
+
+        if (!hasSupporter) {
+            guildsWithoutSupporters.add(guildInfo.guild_id);
         } else {
-            console.log(`[Tasks] [SKIP] Server "${guild.name}" will be skipped.`);
+            const guildName = client.guilds.cache.get(guildInfo.guild_id)?.name ?? `Guild ID ${guildInfo.guild_id}`;
+            console.log(`[Tasks] [SKIP] Server "${guildName}" will be skipped.`);
         }
     }
     
@@ -47,7 +91,11 @@ async function runDailyVoteReminder(client) {
         return;
     }
     
-    const channelsToSendTo = db.prepare(`SELECT channel_id, webhook_url FROM linked_channels WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})`).all();
+    const channelsToSendTo = db.prepare(`
+        SELECT channel_id, webhook_url FROM linked_channels 
+        WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})
+    `).all();
+
     console.log(`[Tasks] Sending reminders to ${channelsToSendTo.length} channel(s) across ${guildsWithoutSupporters.size} server(s).`);
 
     for (const channelInfo of channelsToSendTo) {
@@ -127,6 +175,6 @@ module.exports = {
             }
         }, 15 * 60 * 1000);
         
-        scheduleNextNoonTask(client);
+        //scheduleNextNoonTask(client);
     },
 };
