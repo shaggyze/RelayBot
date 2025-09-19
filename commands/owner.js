@@ -1,7 +1,8 @@
 // commands/owner.js
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, InteractionResponseFlags } = require('discord.js'); // Add InteractionResponseFlags
 const db = require('../db/database.js');
-const { getRateLimitDayString } = require('../utils/time.js'); // [NEW]
+const { getRateLimitDayString } = require('../utils/time.js');
+const { isSupporter } = require('../utils/supporterManager.js'); // [THE CRITICAL FIX] This line was missing.
 
 const BOT_OWNER_ID = '182938628643749888';
 
@@ -28,7 +29,7 @@ module.exports = {
     
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
-            return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+            return interaction.reply({ content: 'You do not have permission to use this command.', flags: [InteractionResponseFlags.Ephemeral] });
         }
 
         const subcommand = interaction.options.getSubcommand();
@@ -51,7 +52,6 @@ module.exports = {
                     return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
                 }
 
-                // First, create a set of all guild IDs that contain at least one supporter.
                 const supporterGuilds = new Set();
                 for (const guild of interaction.client.guilds.cache.values()) {
                     if (guild.members.cache.some(member => !member.user.bot && isSupporter(member.id))) {
@@ -74,7 +74,6 @@ module.exports = {
                     const isPaused = todaysStats.paused;
                     const totalChars = group.total_chars || 0;
 
-                    // Check if any of the guilds linked to this group are in our supporter set.
                     const linkedGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(r => r.guild_id);
                     const isSupporterGroup = linkedGuildIds.some(id => supporterGuilds.has(id));
                     
@@ -88,13 +87,11 @@ module.exports = {
                     }
                     
                     const star = isSupporterGroup ? '⭐' : '';
-                    
                     const todaysChars = todaysStats.count;
                     const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
                     
                     const groupLine = `${statusEmoji} ${star} **${group.group_name}** (Owner: ${ownerInfo})\n`;
                     const statsLine = `  └─ *Stats: ${todaysChars.toLocaleString()} today / ${totalChars.toLocaleString()} total / ${dailyAvg.toLocaleString()} avg.*\n`;
-                    
                     const fullLine = groupLine + statsLine;
 
                     if (currentDescription.length + fullLine.length > 4000) {
@@ -118,26 +115,21 @@ module.exports = {
                 for (let i = 1; i < embeds.length; i++) {
                     await interaction.followUp({ embeds: [embeds[i]], ephemeral: true });
                 }
-
-            } else if (subcommand === 'delete_group') {
+            } 
+            
+            else if (subcommand === 'delete_group') {
                 await interaction.deferReply({ ephemeral: true });
-
                 const groupName = interaction.options.getString('name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
-
-                if (!group) {
-                    return interaction.editReply({ content: `Error: No group found with the exact name "${groupName}".` });
-                }
+                if (!group) return interaction.editReply({ content: `Error: No group found with the exact name "${groupName}".` });
 
                 const result = db.prepare('DELETE FROM relay_groups WHERE group_id = ?').run(group.group_id);
                 let responseMessage = '';
-
                 if (result.changes > 0) {
                     responseMessage += `✅ **Success:** Forcibly deleted the global group "**${groupName}**".`;
                 } else {
                     return interaction.editReply({ content: 'An unexpected error occurred. The group was not deleted.' });
                 }
-                
                 try {
                     const guildToLeave = await interaction.client.guilds.fetch(group.owner_guild_id);
                     if (guildToLeave) {
@@ -145,19 +137,19 @@ module.exports = {
                         responseMessage += `\n\nAdditionally, I have successfully left the owner's server, **${guildToLeave.name}**.`;
                     }
                 } catch (error) {
-                    responseMessage += `\n\nI was unable to leave the owner's server (ID: \`${group.owner_guild_id}\`). I may no longer be a member.`;
+                    responseMessage += `\n\nI was unable to leave the owner's server (ID: \`${group.owner_guild_id}\`).`;
                 }
-                
                 await interaction.editReply({ content: responseMessage });
 
-            } else if (subcommand === 'prune_db') {
+            } 
+            
+            else if (subcommand === 'prune_db') {
                 await interaction.deferReply({ ephemeral: true });
                 const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
                 
                 let prunedGroups = 0, prunedLinks = 0, prunedMappings = 0, prunedWebhooks = 0;
                 const prunedGuilds = [];
 
-                // --- 1. Prune Data from Orphaned Servers (Your Superior Logic Restored) ---
                 const currentGuildIds = new Set(interaction.client.guilds.cache.keys());
                 const groupOwners = db.prepare('SELECT DISTINCT owner_guild_id FROM relay_groups').all().map(r => r.owner_guild_id);
                 const linkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all().map(r => r.guild_id);
@@ -177,15 +169,8 @@ module.exports = {
                     }
                 }
 
-                // --- 2. Prune Inactive Groups (if requested) ---
                 if (includeInactive) {
-                    const inactiveGroups = db.prepare(`
-                        SELECT rg.group_id FROM relay_groups rg
-                        LEFT JOIN group_stats gs ON rg.group_id = gs.group_id
-                        GROUP BY rg.group_id
-                        HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0
-                    `).all();
-                    
+                    const inactiveGroups = db.prepare(`SELECT rg.group_id FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0`).all();
                     if (inactiveGroups.length > 0) {
                         const idsToDelete = inactiveGroups.map(g => g.group_id);
                         const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${idsToDelete.map(() => '?').join(',')})`);
@@ -194,27 +179,20 @@ module.exports = {
                     }
                 }
 
-                // --- 3. Prune Orphaned Webhooks from Current Servers ---
                 const allDbWebhooks = new Set(db.prepare('SELECT webhook_url FROM linked_channels').all().map(r => r.webhook_url));
                 for (const guild of interaction.client.guilds.cache.values()) {
                     try {
                         if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageWebhooks)) continue;
                         const webhooks = await guild.fetchWebhooks();
                         for (const webhook of webhooks.values()) {
-                            // [THE DEFINITIVE FIX]
-                            // Check if the webhook was created by our bot AND is not in our database.
                             if (webhook.owner.id === interaction.client.user.id && !allDbWebhooks.has(webhook.url)) {
-                                console.log(`[PRUNE] Deleting orphaned webhook "${webhook.name}" (ID: ${webhook.id}) in server "${guild.name}".`);
                                 await webhook.delete('Pruning orphaned RelayBot webhook.');
                                 prunedWebhooks++;
                             }
                         }
-                    } catch (err) {
-                        console.error(`[PRUNE] Could not prune webhooks in server "${guild.name}": ${err.message}`);
-                    }
+                    } catch {}
                 }
 
-                // [THE FIX] Build the new, cleaner embed
                 const resultsEmbed = new EmbedBuilder()
                     .setTitle('Database & Webhook Pruning Complete')
                     .setColor('#5865F2')
@@ -227,7 +205,6 @@ module.exports = {
                     )
                     .setTimestamp();
                 
-                // Only add the "Orphaned Server IDs" field if there are actually any to show.
                 if (prunedGuilds.length > 0) {
                     resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${prunedGuilds.join('\n')}\`\`\`` });
                 }
@@ -237,12 +214,11 @@ module.exports = {
         } catch (error) {
             console.error(`Error in /owner ${subcommand}:`, error);
             try {
-                // Check if we can still edit the deferred reply.
+                const content = 'An unknown error occurred. The developer has been notified.';
                 if (interaction.deferred || interaction.replied) {
-                    await interaction.editReply({ content: 'An unknown error occurred. The developer has been notified.' });
+                    await interaction.editReply({ content });
                 } else {
-                    // Fallback if the interaction is completely dead.
-                    await interaction.followUp({ content: 'An unknown error occurred. The developer has been notified.', ephemeral: true });
+                    await interaction.reply({ content, ephemeral: true });
                 }
             } catch (e) {
                 console.error('Failed to send error response to user:', e);
