@@ -2,37 +2,27 @@
 const { Events, WebhookClient, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
 
-// This is the definitive, robust helper function to rebuild a message payload.
 async function rebuildAndEdit(client, originalMessageId) {
-    // 1. Get the original message's details from our database.
     const originalInfo = db.prepare('SELECT original_channel_id, replied_to_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(originalMessageId);
-    if (!originalInfo) return; // This message was not one we relayed.
+    if (!originalInfo) return;
     
-    // 2. Fetch the original message object itself from Discord.
     const originalChannel = await client.channels.fetch(originalInfo.original_channel_id).catch(() => null);
     if (!originalChannel) return;
     const originalMessage = await originalChannel.messages.fetch(originalMessageId).catch(() => null);
     if (!originalMessage) return;
 
-    // 3. Rebuild the sender's identity.
     const senderName = originalMessage.member?.displayName ?? originalMessage.author.username;
     let username = `${senderName} (${originalMessage.guild.name})`;
     if (username.length > 80) username = username.substring(0, 77) + '...';
     const avatarURL = originalMessage.author.displayAvatarURL();
 
-    // 4. Find all the copies of this message that we need to update.
     const copiesToUpdate = db.prepare('SELECT * FROM relayed_messages WHERE original_message_id = ?').all(originalMessageId);
 
-    // 5. Loop through each copy and build a custom payload for it.
     for (const relayed of copiesToUpdate) {
         let replyEmbed = null;
-        // Check if the original message was a reply.
         if (originalMessage.reference && originalMessage.reference.messageId) {
             try {
-                // [THE DEFINITIVE FIX]
-                // 1. Get the correct channel ID from the message reference itself.
                 const repliedToChannel = await client.channels.fetch(originalMessage.reference.channelId);
-                // 2. Fetch the message from that correct channel.
                 const repliedToMessage = await repliedToChannel.messages.fetch(originalMessage.reference.messageId);
 
                 const repliedAuthorName = repliedToMessage.member?.displayName ?? repliedToMessage.author.username;
@@ -42,11 +32,16 @@ async function rebuildAndEdit(client, originalMessageId) {
                     repliedContent += ' *(edited)*';
                 }
                 
-                // Now, find the link for THIS specific target channel.
+                // [THE DEFINITIVE FIX - PART 1]
+                // Get the guild_id for the target channel.
+                const targetChannelInfo = db.prepare('SELECT guild_id FROM linked_channels WHERE channel_id = ?').get(relayed.relayed_channel_id);
+
                 const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(originalMessage.reference.messageId, relayed.relayed_channel_id);
                 let messageLink = null;
-                if (relayedReplyInfo) {
-                    messageLink = `https://discord.com/channels/${relayed.guild_id}/${relayed.relayed_channel_id}/${relayedReplyInfo.relayed_message_id}`;
+                // [THE DEFINITIVE FIX - PART 2]
+                // Use the correct guild_id from our new query.
+                if (relayedReplyInfo && targetChannelInfo) {
+                    messageLink = `https://discord.com/channels/${targetChannelInfo.guild_id}/${relayed.relayed_channel_id}/${relayedReplyInfo.relayed_message_id}`;
                 }
                 
                 replyEmbed = new EmbedBuilder()
@@ -58,19 +53,16 @@ async function rebuildAndEdit(client, originalMessageId) {
             }
         }
 
-        // Rebuild the final payload for this specific copy.
         const payload = {
             content: originalMessage.content,
             username: username,
             avatarURL: avatarURL,
             embeds: [],
             allowedMentions: { parse: ['roles'], repliedUser: false }
-            // Note: Files and stickers cannot be re-sent in an edit.
         };
         if (replyEmbed) payload.embeds.push(replyEmbed);
         payload.embeds.push(...originalMessage.embeds);
 
-        // Send the final edit request.
         try {
             const webhookClient = new WebhookClient({ url: relayed.webhook_url });
             await webhookClient.editMessage(relayed.relayed_message_id, payload);
