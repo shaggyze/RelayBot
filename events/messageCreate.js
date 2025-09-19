@@ -175,9 +175,18 @@ module.exports = {
                 if (replyEmbed) payload.embeds.push(replyEmbed);
                 payload.embeds.push(...message.embeds);
 
-                if (message.stickers.size > 0) {
-                    const sticker = message.stickers.first();
-                    if (sticker && sticker.id) payload.stickers = [sticker.id];
+                try {
+                    if (message.stickers.size > 0) {
+                        // We iterate the collection to get the first sticker safely.
+                        for (const sticker of message.stickers.values()) {
+                            if (sticker && sticker.id) {
+                                payload.stickers = [sticker.id];
+                            }
+                            break; // We only care about the first sticker.
+                        }
+                    }
+                } catch (stickerError) {
+                    console.error('[STICKER-ERROR] A critical error occurred while accessing sticker data. The sticker will not be relayed.', stickerError);
                 }
                 
                 // [THE FIX - PART 2] The database insert MUST happen AFTER the webhook send.
@@ -189,6 +198,7 @@ module.exports = {
 
             } catch (error) {
                     // This is the safety net for this specific target channel.
+					console.error(`[ERROR] Code:`, error.code);
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
 					if (error.code === 50006 && payload.stickers && payload.stickers.length > 0) {
                         // Sticker fallback logic for edits
@@ -210,6 +220,7 @@ module.exports = {
                 }
             }
         } catch (error) {
+			console.error(`[ERROR] Code:`, error.code);
             console.error(`[FATAL-ERROR] A critical unhandled error occurred in messageCreate for message ${message.id}. The bot will not crash. Please report this!`, error);
         }
     },
