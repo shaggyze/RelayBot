@@ -190,7 +190,18 @@ module.exports = {
             } catch (error) {
                     // This is the safety net for this specific target channel.
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                    if (error.code === 10015) {
+					if (error.code === 50006 && payload.stickers && payload.stickers.length > 0) {
+                        // Sticker fallback logic for edits
+                        const sticker = originalMessage.stickers.first();
+                        if (sticker && sticker.name) {
+                            const fallbackPayload = payload;
+                            delete fallbackPayload.stickers;
+                            fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
+                            const webhookClient = new WebhookClient({ url: relayed.webhook_url });
+                            await webhookClient.editMessage(relayed.relayed_message_id, fallbackPayload);
+                            console.log(`[EDIT] SUCCESS (Fallback): Updated relayed message ${relayed.relayed_message_id}`);
+						}
+                    } else if (error.code === 10015) {
                         console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
