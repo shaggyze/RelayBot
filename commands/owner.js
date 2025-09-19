@@ -1,8 +1,8 @@
 // commands/owner.js
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, InteractionResponseFlags } = require('discord.js'); // Add InteractionResponseFlags
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const db = require('../db/database.js');
 const { getRateLimitDayString } = require('../utils/time.js');
-const { isSupporter } = require('../utils/supporterManager.js'); // [THE CRITICAL FIX] This line was missing.
+const { isSupporter } = require('../utils/supporterManager.js');
 
 const BOT_OWNER_ID = '182938628643749888';
 
@@ -25,11 +25,14 @@ module.exports = {
                 .setDescription('Removes orphaned server data and optionally inactive groups/webhooks.')
                 .addBooleanOption(option =>
                     option.setName('include_inactive')
-                        .setDescription('Also prune groups with zero character usage? (Default: False)'))),
+                        .setDescription('Also prune groups with zero total character usage? (Default: False)'))
+                .addIntegerOption(option => // [NEW]
+                    option.setName('days')
+                        .setDescription('Also prune groups inactive for this many days.'))),
     
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
-            return interaction.reply({ content: 'You do not have permission to use this command.', flags: [InteractionResponseFlags.Ephemeral] });
+            return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
         }
 
         const subcommand = interaction.options.getSubcommand();
@@ -42,7 +45,8 @@ module.exports = {
                     SELECT 
                         rg.group_id, rg.group_name, rg.owner_guild_id,
                         SUM(gs.character_count) as total_chars,
-                        COUNT(DISTINCT gs.day) as active_days
+                        COUNT(DISTINCT gs.day) as active_days,
+                        MAX(gs.day) as last_active_day
                     FROM relay_groups rg
                     LEFT JOIN group_stats gs ON rg.group_id = gs.group_id
                     GROUP BY rg.group_id ORDER BY rg.group_name ASC
@@ -63,6 +67,9 @@ module.exports = {
                 const todaysStatsRaw = db.prepare('SELECT group_id, character_count, warning_sent_at FROM group_stats WHERE day = ?').all(today);
                 const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, { count: stat.character_count, paused: !!stat.warning_sent_at }]));
 
+                const sevenDaysAgo = new Date();
+                sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
                 const descriptions = [];
                 let currentDescription = '';
 
@@ -73,20 +80,23 @@ module.exports = {
                     const todaysStats = todaysStatsMap.get(group.group_id) || { count: 0, paused: false };
                     const isPaused = todaysStats.paused;
                     const totalChars = group.total_chars || 0;
+                    const lastActiveDate = group.last_active_day ? new Date(group.last_active_day) : null;
 
-                    const linkedGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(r => r.guild_id);
-                    const isSupporterGroup = linkedGuildIds.some(id => supporterGuilds.has(id));
-                    
                     let statusEmoji;
                     if (isPaused) {
-                        statusEmoji = '🟡';
+                        statusEmoji = '🟡'; // Paused (rate-limited)
                     } else if (totalChars === 0) {
-                        statusEmoji = '🔴';
+                        statusEmoji = '🔴'; // Inactive (zero total usage)
+                    } else if (lastActiveDate && lastActiveDate < sevenDaysAgo) {
+                        statusEmoji = '🟠'; // Stale (inactive for 7+ days)
                     } else {
-                        statusEmoji = '🟢';
+                        statusEmoji = '🟢'; // Active
                     }
                     
+                    const linkedGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(r => r.guild_id);
+                    const isSupporterGroup = linkedGuildIds.some(id => supporterGuilds.has(id));
                     const star = isSupporterGroup ? '⭐' : '';
+                    
                     const todaysChars = todaysStats.count;
                     const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
                     
@@ -108,7 +118,7 @@ module.exports = {
                         .setColor('#FFD700')
                         .setDescription(desc)
                         .setTimestamp()
-                        .setFooter({ text: `Total Groups: ${allGroups.length} | 🟢 Active / 🟡 Paused / 🔴 Inactive | ⭐ Supporter Group` });
+                        .setFooter({ text: `Total Groups: ${allGroups.length} | 🟢 Active / 🟡 Paused / 🟠 Stale / 🔴 Inactive | ⭐ Supporter` });
                 });
 
                 await interaction.editReply({ embeds: [embeds[0]] });
@@ -140,16 +150,16 @@ module.exports = {
                     responseMessage += `\n\nI was unable to leave the owner's server (ID: \`${group.owner_guild_id}\`).`;
                 }
                 await interaction.editReply({ content: responseMessage });
-
-            } 
-            
-            else if (subcommand === 'prune_db') {
+            } else if (subcommand === 'prune_db') {
                 await interaction.deferReply({ ephemeral: true });
                 const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
-                
+                const inactiveDays = interaction.options.getInteger('days');
+
                 let prunedGroups = 0, prunedLinks = 0, prunedMappings = 0, prunedWebhooks = 0;
                 const prunedGuilds = [];
+                const groupIdsToDelete = new Set();
 
+                // --- 1. Prune Data from Orphaned Servers ---
                 const currentGuildIds = new Set(interaction.client.guilds.cache.keys());
                 const groupOwners = db.prepare('SELECT DISTINCT owner_guild_id FROM relay_groups').all().map(r => r.owner_guild_id);
                 const linkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all().map(r => r.guild_id);
@@ -169,6 +179,35 @@ module.exports = {
                     }
                 }
 
+                // --- 2. Prune Inactive Groups (if requested) ---
+                if (includeInactive) {
+                    const inactiveGroups = db.prepare(`SELECT rg.group_id FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0`).all();
+                    inactiveGroups.forEach(g => groupIdsToDelete.add(g.group_id));
+                }
+
+                // --- 3. Prune Stale Groups (if requested) ---
+                if (inactiveDays !== null && inactiveDays > 0) {
+                    const cutoffDate = new Date();
+                    cutoffDate.setDate(cutoffDate.getDate() - inactiveDays);
+                    const cutoffDateString = cutoffDate.toISOString().slice(0, 10);
+
+                    const staleGroups = db.prepare(`
+                        SELECT group_id FROM relay_groups WHERE group_id NOT IN (
+                            SELECT DISTINCT group_id FROM group_stats WHERE day >= ?
+                        )
+                    `).all(cutoffDateString);
+                    staleGroups.forEach(g => groupIdsToDelete.add(g.group_id));
+                }
+
+                // Delete all collected inactive/stale groups
+                if (groupIdsToDelete.size > 0) {
+                    const ids = Array.from(groupIdsToDelete);
+                    const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${ids.map(() => '?').join(',')})`);
+                    const result = stmt.run(...ids);
+                    prunedGroups += result.changes;
+                }
+
+                // --- 4. Prune Orphaned Webhooks ---
                 if (includeInactive) {
                     const inactiveGroups = db.prepare(`SELECT rg.group_id FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0`).all();
                     if (inactiveGroups.length > 0) {
@@ -177,6 +216,7 @@ module.exports = {
                         const result = stmt.run(...idsToDelete);
                         prunedGroups += result.changes;
                     }
+                    inactiveGroups.forEach(g => groupIdsToDelete.add(g.group_id));
                 }
 
                 const allDbWebhooks = new Set(db.prepare('SELECT webhook_url FROM linked_channels').all().map(r => r.webhook_url));
@@ -193,10 +233,11 @@ module.exports = {
                     } catch {}
                 }
 
+                // Build the final report embed
                 const resultsEmbed = new EmbedBuilder()
                     .setTitle('Database & Webhook Pruning Complete')
                     .setColor('#5865F2')
-                    .setDescription(`Cleanup operation finished. Found and removed data for **${prunedGuilds.length}** orphaned server(s).`)
+                    .setDescription(`Cleanup operation finished. Pruned data for **${prunedGuilds.length}** orphaned server(s).`)
                     .addFields(
                         { name: 'Groups Deleted', value: `${prunedGroups}`, inline: true },
                         { name: 'Channel Links Deleted', value: `${prunedLinks}`, inline: true },
