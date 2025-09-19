@@ -175,6 +175,6 @@ module.exports = {
             }
         }, 15 * 60 * 1000);
         
-        //scheduleNextNoonTask(client);
+        scheduleNextNoonTask(client);
     },
 };

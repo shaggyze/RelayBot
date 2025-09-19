@@ -131,9 +131,8 @@ module.exports = {
                             // Now, safely perform the database lookup. This will not throw an error.
                             const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(repliedMessage.id, target.channel_id);
                             
-                            let messageLink = null; // Default to no link.
-                            if (relayedReplyInfo) {
-                                // If we found a corresponding message in the target channel, build the link.
+                            let messageLink = null;
+                            if (relayedReplyInfo && target.guild_id && target.channel_id && relayedReplyInfo.relayed_message_id) {
                                 messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                             }
                             

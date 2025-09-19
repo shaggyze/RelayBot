@@ -7,7 +7,7 @@ async function rebuildAndEdit(client, originalMessageId) {
     // 1. Get the original message's details from our database.
     const originalInfo = db.prepare('SELECT original_channel_id, replied_to_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(originalMessageId);
     if (!originalInfo) return; // This message was not one we relayed.
-
+    
     // 2. Fetch the original message object itself from Discord.
     const originalChannel = await client.channels.fetch(originalInfo.original_channel_id).catch(() => null);
     if (!originalChannel) return;
@@ -27,17 +27,14 @@ async function rebuildAndEdit(client, originalMessageId) {
     for (const relayed of copiesToUpdate) {
         let replyEmbed = null;
         // Check if the original message was a reply.
-        if (originalInfo.replied_to_id) {
-            let repliedToMessage;
+        if (originalMessage.reference && originalMessage.reference.messageId) {
             try {
-                // Fetch the message that was replied to.
-                repliedToMessage = await client.channels.cache.get(originalInfo.original_channel_id)?.messages.fetch(originalInfo.replied_to_id);
-            } catch {
-                // If we can't fetch it, it was likely deleted.
-                replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
-            }
+                // [THE DEFINITIVE FIX]
+                // 1. Get the correct channel ID from the message reference itself.
+                const repliedToChannel = await client.channels.fetch(originalMessage.reference.channelId);
+                // 2. Fetch the message from that correct channel.
+                const repliedToMessage = await repliedToChannel.messages.fetch(originalMessage.reference.messageId);
 
-            if (repliedToMessage) {
                 const repliedAuthorName = repliedToMessage.member?.displayName ?? repliedToMessage.author.username;
                 const repliedAuthorAvatar = repliedToMessage.author.displayAvatarURL();
                 let repliedContent = repliedToMessage.content ? repliedToMessage.content.substring(0, 1000) : '*(Message had no text content)*';
@@ -46,7 +43,7 @@ async function rebuildAndEdit(client, originalMessageId) {
                 }
                 
                 // Now, find the link for THIS specific target channel.
-                const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(originalInfo.replied_to_id, relayed.relayed_channel_id);
+                const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(originalMessage.reference.messageId, relayed.relayed_channel_id);
                 let messageLink = null;
                 if (relayedReplyInfo) {
                     messageLink = `https://discord.com/channels/${relayed.guild_id}/${relayed.relayed_channel_id}/${relayedReplyInfo.relayed_message_id}`;
@@ -56,10 +53,12 @@ async function rebuildAndEdit(client, originalMessageId) {
                     .setColor('#B0B8C6')
                     .setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                     .setDescription(repliedContent);
+            } catch {
+                replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
             }
         }
 
-        // Rebuild the payload for this specific copy
+        // Rebuild the final payload for this specific copy.
         const payload = {
             content: originalMessage.content,
             username: username,
@@ -71,10 +70,11 @@ async function rebuildAndEdit(client, originalMessageId) {
         if (replyEmbed) payload.embeds.push(replyEmbed);
         payload.embeds.push(...originalMessage.embeds);
 
+        // Send the final edit request.
         try {
             const webhookClient = new WebhookClient({ url: relayed.webhook_url });
             await webhookClient.editMessage(relayed.relayed_message_id, payload);
-			console.log(`[EDIT] SUCCESS: Updated relayed message ${relayed.relayed_message_id}`);
+            console.log(`[EDIT] SUCCESS: Updated relayed message ${relayed.relayed_message_id}`);
         } catch (error) {
             if (error.code === 10015) { db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(relayed.relayed_channel_id); } 
             else { console.error(`[EDIT] FAILED to edit message ${relayed.relayed_message_id}:`, error.message); }
