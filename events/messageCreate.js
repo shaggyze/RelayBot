@@ -175,43 +175,42 @@ module.exports = {
                 if (replyEmbed) payload.embeds.push(replyEmbed);
                 payload.embeds.push(...message.embeds);
 
-                try {
-                    if (message.stickers.size > 0) {
-                        // We iterate the collection to get the first sticker safely.
-                        for (const sticker of message.stickers.values()) {
-                            if (sticker && sticker.id) {
-                                payload.stickers = [sticker.id];
-                            }
-                            break; // We only care about the first sticker.
-                        }
+                if (message.stickers.size > 0) {
+                    const sticker = message.stickers.first();
+                    if (sticker && sticker.id) {
+                        payload.stickers = [sticker.id];
                     }
-                } catch (stickerError) {
-                    console.error('[STICKER-ERROR] A critical error occurred while accessing sticker data. The sticker will not be relayed.', stickerError);
                 }
-                
-                // [THE FIX - PART 2] The database insert MUST happen AFTER the webhook send.
-                const webhookClient = new WebhookClient({ url: target.webhook_url });
-                const relayedMessage = await webhookClient.send(payload);
-
-                db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
-                  .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
-
-            } catch (error) {
-                    // This is the safety net for this specific target channel.
-					console.error(`[ERROR] Code:`, error.code);
-                    const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-					if (error.code === 50006 && payload.stickers && payload.stickers.length > 0) {
-                        // Sticker fallback logic for edits
-                        const sticker = originalMessage.stickers.first();
+                    
+                let relayedMessage = null;
+                try {
+                    const webhookClient = new WebhookClient({ url: target.webhook_url });
+                    relayedMessage = await webhookClient.send(payload);
+                } catch (sendError) {
+                    if (sendError.code === 50006 && payload.stickers && payload.stickers.length > 0) {
+                        const sticker = message.stickers.first();
                         if (sticker && sticker.name) {
                             const fallbackPayload = payload;
                             delete fallbackPayload.stickers;
                             fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-                            const webhookClient = new WebhookClient({ url: relayed.webhook_url });
-                            await webhookClient.editMessage(relayed.relayed_message_id, fallbackPayload);
-                            console.log(`[EDIT] SUCCESS (Fallback): Updated relayed message ${relayed.relayed_message_id}`);
-						}
-                    } else if (error.code === 10015) {
+                            const webhookClient = new WebhookClient({ url: target.webhook_url });
+                            relayedMessage = await webhookClient.send(fallbackPayload);
+                        }
+                    } else {
+                        // Re-throw other send errors to be caught by the main loop's catch block.
+                        throw sendError;
+                    }
+                }
+
+                if (relayedMessage) {
+                    db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
+                      .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
+                }
+            } catch (error) {
+                    // This is the safety net for this specific target channel.
+					console.error(`[ERROR] Code:`, error.code);
+                    const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
+					if (error.code === 10015) {
                         console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
