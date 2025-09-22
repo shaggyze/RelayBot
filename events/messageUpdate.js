@@ -28,7 +28,7 @@ async function rebuildAndEdit(client, originalMessageId) {
     const safeFiles = [];
     const largeFiles = [];
     let currentTotalSize = 0;
-    const sortedAttachments = Array.from(message.attachments.values())
+    const sortedAttachments = Array.from(originalMessage.attachments.values())
         .sort((a, b) => a.size - b.size);
 
     for (const attachment of sortedAttachments) {
