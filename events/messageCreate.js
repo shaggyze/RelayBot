@@ -9,6 +9,7 @@ const webhookCache = new Collection();
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
 const RATE_LIMIT_CHARS = 200000;
+const DISCORD_MESSAGE_LIMIT = 2000;
 
 async function checkGroupForSupporters(client, groupId) {
     const supporterIdList = getSupporterSet();
@@ -97,10 +98,19 @@ module.exports = {
             
             const safeFiles = [];
             const largeFiles = [];
-            message.attachments.forEach(att => {
-                if (att.size > MAX_FILE_SIZE) largeFiles.push(att.name);
-                else safeFiles.push(att.url);
-            });
+            let currentTotalSize = 0;
+            const sortedAttachments = Array.from(message.attachments.values())
+                .sort((a, b) => a.size - b.size);
+
+            for (const attachment of sortedAttachments) {
+                // Check if adding the NEXT file exceeds the TOTAL limit.
+                if (currentTotalSize + attachment.size > MAX_FILE_SIZE) {
+                    largeFiles.push(attachment.name);
+                } else {
+                    safeFiles.push(attachment.url);
+                    currentTotalSize += attachment.size;
+                }
+            }
 
             for (const target of targetChannels) {
             const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
@@ -116,7 +126,7 @@ module.exports = {
                             repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                         } catch {
                             // If fetching fails, create the "inaccessible" embed and do nothing else.
-                            replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
+                            replyEmbed = new EmbedBuilder().setColor('#444444').setDescription('*Replying to a deleted or inaccessible message.*');
                         }
 
                         // This code only runs if the fetch was successful.
@@ -137,7 +147,7 @@ module.exports = {
                             }
                             
                             replyEmbed = new EmbedBuilder()
-                                .setColor('#B0B8C6')
+                                .setColor('#444444')
                                 .setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                 .setDescription(repliedContent);
                         }
@@ -160,7 +170,12 @@ module.exports = {
                 
                 let finalContent = targetContent;
                 if (largeFiles.length > 0) {
-                    finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large...)*`;
+                    finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
+                }
+
+                if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
+                    const truncationNotice = `\n*(Message was truncated because it exceeded the 2000 character limit.)*`;
+                    finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                 }
 
                 const payload = {

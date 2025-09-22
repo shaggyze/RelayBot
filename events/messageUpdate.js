@@ -4,6 +4,7 @@ const db = require('../db/database.js');
 
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
+const DISCORD_MESSAGE_LIMIT = 2000;
 
 // This is the definitive, robust helper function to rebuild and edit a message.
 async function rebuildAndEdit(client, originalMessageId) {
@@ -24,13 +25,21 @@ async function rebuildAndEdit(client, originalMessageId) {
 
     const copiesToUpdate = db.prepare('SELECT * FROM relayed_messages WHERE original_message_id = ?').all(originalMessageId);
 
-    // [THE FIX] Pre-process attachments just like in messageCreate.
     const safeFiles = [];
     const largeFiles = [];
-    originalMessage.attachments.forEach(att => {
-        if (att.size > MAX_FILE_SIZE) largeFiles.push(att.name);
-        else safeFiles.push(att.url);
-    });
+    let currentTotalSize = 0;
+    const sortedAttachments = Array.from(message.attachments.values())
+        .sort((a, b) => a.size - b.size);
+
+    for (const attachment of sortedAttachments) {
+        // Check if adding the NEXT file exceeds the TOTAL limit.
+        if (currentTotalSize + attachment.size > MAX_FILE_SIZE) {
+            largeFiles.push(attachment.name);
+        } else {
+            safeFiles.push(attachment.url);
+            currentTotalSize += attachment.size;
+        }
+    }
 
     for (const relayed of copiesToUpdate) {
         try {
@@ -61,7 +70,12 @@ async function rebuildAndEdit(client, originalMessageId) {
             
             let finalContent = originalMessage.content;
             if (largeFiles.length > 0) {
-                finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large to be relayed: ${largeFiles.join(', ')})*`;
+                finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
+            }
+
+            if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
+                const truncationNotice = `\n*(Message was truncated because it exceeded the 2000 character limit.)*`;
+                finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
             }
 
             const payload = {
