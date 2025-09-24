@@ -260,32 +260,48 @@ module.exports = {
                 await interaction.deferReply({ ephemeral: true });
 
                 const uploadSecret = process.env.UPLOAD_SECRET_KEY;
-                if (!uploadSecret) {
-                    return interaction.editReply({ content: '❌ **Configuration Error:** The `UPLOAD_SECRET_KEY` is not set in the bot\'s environment variables.' });
+                const clientId = process.env.CLIENT_ID; // Get the Client ID from environment
+                if (!uploadSecret || !clientId) {
+                    return interaction.editReply({ content: '❌ **Configuration Error:** `UPLOAD_SECRET_KEY` and `CLIENT_ID` must be set.' });
                 }
+
+                // [THE FIX - PART 1] Create the dynamic filename.
+                const timestamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
+                const dynamicFilename = `database_${clientId}_${timestamp}.db`;
 
                 const dbPath = '/data/database.db';
                 const uploadUrl = 'https://shaggyze.website/railway-upload.php';
-                
-                const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" ${uploadUrl}`;
                 console.log(`[DB-UPLOAD] Executing command: ${command.replace(uploadSecret, '***')}`);
+                // Add the filename to the curl command as a new form field.
+                const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" -F "filename=${dynamicFilename}" ${uploadUrl}`;
+
                 exec(command, (error, stdout, stderr) => {
                     const stdoutStr = stdout.toString();
                     const stderrStr = stderr.toString();
-
                     if (error) {
                         console.error('[DB-UPLOAD] Exec error:', error);
-                        return interaction.editReply({ content: `An error occurred while executing the curl command on the server: \`\`\`${stderrStr}\`\`\`` });
+                        return interaction.editReply({ content: `An error occurred while executing curl: \`\`\`${stderrStr}\`\`\`` });
                     }
 
-                    const successEmbed = new EmbedBuilder()
-                        .setTitle('Database Upload Status')
-                        .setColor('#5865F2')
-                        .setDescription('The database file has been uploaded to your web server.')
-                        .addFields({ name: 'Server Response', value: `\`\`\`${stdoutStr || 'No response body received.'}\`\`\`` })
-                        .setTimestamp();
-                    
-                    interaction.editReply({ embeds: [successEmbed] });
+                    try {
+                        const response = JSON.parse(stdoutStr);
+                        // [THE FIX - PART 2] The PHP script now returns a direct URL.
+                        if (response.success && response.url) {
+                            const successEmbed = new EmbedBuilder()
+                                .setTitle('Database Upload Successful')
+                                .setColor('#5865F2')
+                                .setDescription(`The database has been uploaded and is ready for download.\n\n**[Click Here to Download](${response.url})**`)
+                                .addFields({ name: 'Filename', value: `\`${response.filename}\`` })
+                                .setFooter({ text: 'This is a one-time link for security.' })
+                                .setTimestamp();
+                            
+                            interaction.editReply({ embeds: [successEmbed] });
+                        } else {
+                            interaction.editReply({ content: `The upload script returned an error: \`\`\`${response.message || stdoutStr}\`\`\`` });
+                        }
+                    } catch (parseError) {
+                        interaction.editReply({ content: `Failed to parse the server response. Raw output: \`\`\`${stdoutStr}\`\`\`` });
+                    }
                 });
             }
         } catch (error) {
