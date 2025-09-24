@@ -259,7 +259,7 @@ module.exports = {
             } else if (subcommand === 'upload_db') {
                 await interaction.deferReply({ ephemeral: true });
 
-                const uploadSecret = 'kFp3s6v9y$B&E)H@McQfTjWnZq4t7w!z';
+                const uploadSecret = process.env.UPLOAD_SECRET_KEY;
                 if (!uploadSecret) {
                     return interaction.editReply({ content: '❌ **Configuration Error:** The `UPLOAD_SECRET_KEY` is not set in the bot\'s environment variables.' });
                 }
