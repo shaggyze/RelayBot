@@ -264,26 +264,25 @@ module.exports = {
                     return interaction.editReply({ content: '❌ **Configuration Error:** The `UPLOAD_SECRET_KEY` is not set in the bot\'s environment variables.' });
                 }
 
-                const dbPath = '/data/database.db'; // The absolute path in the Railway container
+                const dbPath = '/data/database.db';
                 const uploadUrl = 'https://shaggyze.website/railway-upload.php';
                 
-                // Build the command carefully to avoid shell injection issues.
                 const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" ${uploadUrl}`;
-
                 console.log(`[DB-UPLOAD] Executing command: ${command.replace(uploadSecret, '***')}`);
-
                 exec(command, (error, stdout, stderr) => {
+                    const stdoutStr = stdout.toString();
+                    const stderrStr = stderr.toString();
+
                     if (error) {
                         console.error('[DB-UPLOAD] Exec error:', error);
-                        return interaction.editReply({ content: `An error occurred while executing the curl command on the server: \`\`\`${stderr}\`\`\`` });
+                        return interaction.editReply({ content: `An error occurred while executing the curl command on the server: \`\`\`${stderrStr}\`\`\`` });
                     }
 
-                    // stdout contains the response from your PHP script.
                     const successEmbed = new EmbedBuilder()
                         .setTitle('Database Upload Status')
                         .setColor('#5865F2')
                         .setDescription('The database file has been uploaded to your web server.')
-                        .addFields({ name: 'Server Response', value: `\`\`\`${stdout || 'No response body received.'}\`\`\`` })
+                        .addFields({ name: 'Server Response', value: `\`\`\`${stdoutStr || 'No response body received.'}\`\`\`` })
                         .setTimestamp();
                     
                     interaction.editReply({ embeds: [successEmbed] });
