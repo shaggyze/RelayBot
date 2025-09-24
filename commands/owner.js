@@ -271,7 +271,7 @@ module.exports = {
 
                 const dbPath = '/data/database.db';
                 const uploadUrl = 'https://shaggyze.website/railway-upload.php';
-                console.log(`[DB-UPLOAD] Executing command: ${command.replace(uploadSecret, '***')}`);
+
                 // Add the filename to the curl command as a new form field.
                 const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" -F "filename=${dynamicFilename}" ${uploadUrl}`;
 
