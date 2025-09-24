@@ -29,7 +29,7 @@ module.exports = {
                         .setDescription('Also prune groups with zero total character usage? (Default: False)'))
                 .addIntegerOption(option =>
                     option.setName('days')
-                        .setDescription('Also prune groups inactive for this many days.'))),
+                        .setDescription('Also prune groups inactive for this many days.')))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('download_db')
