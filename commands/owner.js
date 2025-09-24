@@ -1,5 +1,6 @@
 // commands/owner.js
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { exec } = require('child_process');
 const db = require('../db/database.js');
 const { getRateLimitDayString } = require('../utils/time.js');
 const { isSupporter } = require('../utils/supporterManager.js');
@@ -26,10 +27,14 @@ module.exports = {
                 .addBooleanOption(option =>
                     option.setName('include_inactive')
                         .setDescription('Also prune groups with zero total character usage? (Default: False)'))
-                .addIntegerOption(option => // [NEW]
+                .addIntegerOption(option =>
                     option.setName('days')
                         .setDescription('Also prune groups inactive for this many days.'))),
-    
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('download_db')
+                .setDescription('Generates a one-time link to download the bot\'s database file.')),
+
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
             return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
@@ -251,6 +256,37 @@ module.exports = {
                 }
                 
                 await interaction.editReply({ embeds: [resultsEmbed] });
+            } else if (subcommand === 'download_db') {
+                await interaction.deferReply({ ephemeral: true });
+
+                const dbPath = '/data/database.db'; // The absolute path in the Railway container
+                const command = `curl -F "file=@${dbPath}" https://file.io`;
+
+                exec(command, (error, stdout, stderr) => {
+                    if (error) {
+                        console.error('[DB-DOWNLOAD] Exec error:', error);
+                        return interaction.editReply({ content: `An error occurred while executing the curl command: \`\`\`${stderr}\`\`\`` });
+                    }
+
+                    try {
+                        const response = JSON.parse(stdout);
+                        if (response.success) {
+                            const downloadEmbed = new EmbedBuilder()
+                                .setTitle('Database Download Link Ready')
+                                .setColor('#5865F2')
+                                .setDescription(`Your one-time download link is ready. This link will expire after one use or in 14 days.\n\n**[Click Here to Download](${response.link})**`)
+                                .addFields({ name: 'File Key', value: `\`${response.key}\`` })
+                                .setTimestamp();
+                            
+                            interaction.editReply({ embeds: [downloadEmbed] });
+                        } else {
+                            interaction.editReply({ content: `File.io returned an error: \`\`\`${stdout}\`\`\`` });
+                        }
+                    } catch (parseError) {
+                        console.error('[DB-DOWNLOAD] JSON Parse error:', parseError);
+                        interaction.editReply({ content: `Failed to parse the response from File.io. Raw output: \`\`\`${stdout}\`\`\`` });
+                    }
+                });
             }
         } catch (error) {
             console.error(`Error in /owner ${subcommand}:`, error);
