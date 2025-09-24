@@ -32,8 +32,8 @@ module.exports = {
                         .setDescription('Also prune groups inactive for this many days.')))
         .addSubcommand(subcommand =>
             subcommand
-                .setName('download_db')
-                .setDescription('Generates a one-time link to download the bot\'s database file.')),
+                .setName('upload_db')
+                .setDescription('Uploads the database to your secure web server endpoint.')),
 
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
@@ -256,36 +256,37 @@ module.exports = {
                 }
                 
                 await interaction.editReply({ embeds: [resultsEmbed] });
-            } else if (subcommand === 'download_db') {
+            } else if (subcommand === 'upload_db') {
                 await interaction.deferReply({ ephemeral: true });
 
+                const uploadSecret = 'kFp3s6v9y$B&E)H@McQfTjWnZq4t7w!z';
+                if (!uploadSecret) {
+                    return interaction.editReply({ content: '❌ **Configuration Error:** The `UPLOAD_SECRET_KEY` is not set in the bot\'s environment variables.' });
+                }
+
                 const dbPath = '/data/database.db'; // The absolute path in the Railway container
-                const command = `curl -F "file=@${dbPath}" https://file.io`;
+                const uploadUrl = 'https://shaggyze.website/railway-upload.php';
+                
+                // Build the command carefully to avoid shell injection issues.
+                const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" ${uploadUrl}`;
+
+                console.log(`[DB-UPLOAD] Executing command: ${command.replace(uploadSecret, '***')}`);
 
                 exec(command, (error, stdout, stderr) => {
                     if (error) {
-                        console.error('[DB-DOWNLOAD] Exec error:', error);
-                        return interaction.editReply({ content: `An error occurred while executing the curl command: \`\`\`${stderr}\`\`\`` });
+                        console.error('[DB-UPLOAD] Exec error:', error);
+                        return interaction.editReply({ content: `An error occurred while executing the curl command on the server: \`\`\`${stderr}\`\`\`` });
                     }
 
-                    try {
-                        const response = JSON.parse(stdout);
-                        if (response.success) {
-                            const downloadEmbed = new EmbedBuilder()
-                                .setTitle('Database Download Link Ready')
-                                .setColor('#5865F2')
-                                .setDescription(`Your one-time download link is ready. This link will expire after one use or in 14 days.\n\n**[Click Here to Download](${response.link})**`)
-                                .addFields({ name: 'File Key', value: `\`${response.key}\`` })
-                                .setTimestamp();
-                            
-                            interaction.editReply({ embeds: [downloadEmbed] });
-                        } else {
-                            interaction.editReply({ content: `File.io returned an error: \`\`\`${stdout}\`\`\`` });
-                        }
-                    } catch (parseError) {
-                        console.error('[DB-DOWNLOAD] JSON Parse error:', parseError);
-                        interaction.editReply({ content: `Failed to parse the response from File.io. Raw output: \`\`\`${stdout}\`\`\`` });
-                    }
+                    // stdout contains the response from your PHP script.
+                    const successEmbed = new EmbedBuilder()
+                        .setTitle('Database Upload Status')
+                        .setColor('#5865F2')
+                        .setDescription('The database file has been uploaded to your web server.')
+                        .addFields({ name: 'Server Response', value: `\`\`\`${stdout || 'No response body received.'}\`\`\`` })
+                        .setTimestamp();
+                    
+                    interaction.editReply({ embeds: [successEmbed] });
                 });
             }
         } catch (error) {
