@@ -168,41 +168,57 @@ module.exports = {
                     }
                 }
                 
-                let finalContent = targetContent;
-                if (largeFiles.length > 0) {
-                    finalContent += `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
-                }
 
+                // STEP 1: Build the complete text/embed payload first.
+                let finalContent = targetContent;
+                // Note: We calculate largeFiles later, so the warning will be in a follow-up if needed.
                 if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
-                    const truncationNotice = `\n*(Message was truncated because it exceeded the 2000 character limit.)*`;
+                    const truncationNotice = `\n*(Message was truncated...)*`;
                     finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                 }
 
-                const payload = {
+                const payloadWithoutFiles = {
                     content: finalContent,
                     username: username,
                     avatarURL: avatarURL,
-                    files: safeFiles,
                     embeds: [],
                     allowedMentions: { parse: ['roles'], repliedUser: false }
                 };
-
-                if (replyEmbed) payload.embeds.push(replyEmbed);
-                payload.embeds.push(...message.embeds);
-
+                if (replyEmbed) payloadWithoutFiles.embeds.push(replyEmbed);
+                payloadWithoutFiles.embeds.push(...message.embeds);
                 if (message.stickers.size > 0) {
                     const sticker = message.stickers.first();
-                    if (sticker && sticker.id) {
-                        payload.stickers = [sticker.id];
+                    if (sticker && sticker.id) payloadWithoutFiles.stickers = [sticker.id];
+                }
+
+                // STEP 2: Calculate the size of the JSON part and determine our file budget.
+                const jsonSize = Buffer.byteLength(JSON.stringify(payloadWithoutFiles));
+                const fileBudget = MAX_PAYLOAD_SIZE - jsonSize;
+
+                // STEP 3: Intelligently pack files into the remaining budget.
+                const safeFiles = [];
+                const largeFiles = [];
+                let currentTotalSize = 0;
+                const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
+
+                for (const attachment of sortedAttachments) {
+                    if (currentTotalSize + attachment.size > fileBudget) {
+                        largeFiles.push(attachment.name);
+                    } else {
+                        safeFiles.push(attachment.url);
+                        currentTotalSize += attachment.size;
                     }
                 }
+
+                // STEP 4: Assemble the final payload and send.
+                const finalPayload = { ...payloadWithoutFiles, files: safeFiles };
                     
                 let relayedMessage = null;
+                const webhookClient = new WebhookClient({ url: target.webhook_url });
                 try {
-                    const webhookClient = new WebhookClient({ url: target.webhook_url });
-                    relayedMessage = await webhookClient.send(payload);
+                    relayedMessage = await webhookClient.send(finalPayload);
                 } catch (sendError) {
-                    if (sendError.code === 50006 && payload.stickers && payload.stickers.length > 0) {
+                    if (sendError.code === 50006 && finalPayload.stickers) {
                         const sticker = message.stickers.first();
                         if (sticker && sticker.name) {
                             const fallbackPayload = payload;
@@ -212,9 +228,18 @@ module.exports = {
                             relayedMessage = await webhookClient.send(fallbackPayload);
                         }
                     } else {
-                        // Re-throw other send errors to be caught by the main loop's catch block.
                         throw sendError;
                     }
+                }
+
+                // STEP 5: Send a follow-up message for any oversized files.
+                if (largeFiles.length > 0) {
+                    const fileNotice = `*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
+                    await webhookClient.send({
+                        content: fileNotice,
+                        username: username,
+                        avatarURL: avatarURL
+                    });
                 }
 
                 if (relayedMessage) {

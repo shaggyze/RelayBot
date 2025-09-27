@@ -292,7 +292,7 @@ module.exports = {
                                 .setColor('#5865F2')
                                 .setDescription(`The database has been uploaded and is ready for download.\n\n**[Click Here to Download](${response.url})**`)
                                 .addFields({ name: 'Filename', value: `\`${response.filename}\`` })
-                                .setFooter({ text: 'This is a one-time link for security.' })
+                                .setFooter({ text: 'Do not share this link.' })
                                 .setTimestamp();
                             
                             interaction.editReply({ embeds: [successEmbed] });
