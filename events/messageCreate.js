@@ -95,22 +95,6 @@ module.exports = {
             }
             
             const avatarURL = message.author.displayAvatarURL();
-            
-            const safeFiles = [];
-            const largeFiles = [];
-            let currentTotalSize = 0;
-            const sortedAttachments = Array.from(message.attachments.values())
-                .sort((a, b) => a.size - b.size);
-
-            for (const attachment of sortedAttachments) {
-                // Check if adding the NEXT file exceeds the TOTAL limit.
-                if (currentTotalSize + attachment.size > MAX_FILE_SIZE) {
-                    largeFiles.push(attachment.name);
-                } else {
-                    safeFiles.push(attachment.url);
-                    currentTotalSize += attachment.size;
-                }
-            }
 
             for (const target of targetChannels) {
             const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
