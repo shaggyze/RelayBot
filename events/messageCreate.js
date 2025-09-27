@@ -138,16 +138,21 @@ module.exports = {
                     }
 
                 let targetContent = message.content;
+                let hasUnmappedRoles = false;
                 const roleMentions = targetContent.match(/<@&(\d+)>/g);
                 if (roleMentions) {
-                    // Role mapping logic... (This part is correct)
                     for (const mention of roleMentions) {
                         const sourceRoleId = mention.match(/\d+/)[0];
                         const roleMap = db.prepare(`SELECT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_id = ?`).get(sourceChannelInfo.group_id, message.guild.id, sourceRoleId);
-                        if (!roleMap) continue;
+                        if (!roleMap) {
+                            hasUnmappedRoles = true;
+                            continue;
+                        }
                         let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
                         if (targetRole) {
                             targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
+                        } else {
+                            hasUnmappedRoles = true;
                         }
                     }
                 }
