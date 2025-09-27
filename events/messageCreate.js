@@ -155,6 +155,14 @@ module.exports = {
 
                 // STEP 1: Build the complete text/embed payload first.
                 let finalContent = targetContent;
+
+                // Check if the message's only text is unmapped roles.
+                const contentWithoutMentions = finalContent.replace(/<@!?&?#?(\d+)>/g, '').trim();
+                if (contentWithoutMentions.length === 0 && hasUnmappedRoles) {
+                    // If so, replace the content with a helpful message.
+                      finalContent = `*(A role in the original message was not relayed because it has not been mapped in this server. An admin can use \`/relay map_role\` to fix this.)*`;
+                }
+
                 // Note: We calculate largeFiles later, so the warning will be in a follow-up if needed.
                 if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
                     const truncationNotice = `\n*(Message was truncated...)*`;
@@ -196,7 +204,11 @@ module.exports = {
 
                 // STEP 4: Assemble the final payload and send.
                 const finalPayload = { ...payloadWithoutFiles, files: safeFiles };
-                    
+
+				if (!finalPayload.content.trim() && finalPayload.files.length === 0 && finalPayload.embeds.length === 0 && !finalPayload.stickers) {
+                        finalPayload.content = '\u200B'; // Zero-width space
+                }
+
                 let relayedMessage = null;
                 try {
                     const webhookClient = new WebhookClient({ url: target.webhook_url });
