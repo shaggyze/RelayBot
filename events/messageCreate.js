@@ -198,20 +198,28 @@ module.exports = {
                 const finalPayload = { ...payloadWithoutFiles, files: safeFiles };
                     
                 let relayedMessage = null;
-                const webhookClient = new WebhookClient({ url: target.webhook_url });
                 try {
+                    const webhookClient = new WebhookClient({ url: target.webhook_url });
                     relayedMessage = await webhookClient.send(finalPayload);
                 } catch (sendError) {
+                    // [THE DEFINITIVE FIX]
+                    // The sticker fallback logic now correctly uses 'finalPayload'.
                     if (sendError.code === 50006 && finalPayload.stickers) {
-                        const sticker = message.stickers.first();
-                        if (sticker && sticker.name) {
-                            const fallbackPayload = payload;
-                            delete fallbackPayload.stickers;
-                            fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-                            const webhookClient = new WebhookClient({ url: target.webhook_url });
-                            relayedMessage = await webhookClient.send(fallbackPayload);
+                        console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
+                        try {
+                            const sticker = message.stickers.first();
+                            if (sticker && sticker.name) {
+                                const fallbackPayload = { ...finalPayload }; // Create a safe copy
+                                delete fallbackPayload.stickers;
+                                fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
+                                const webhookClient = new WebhookClient({ url: target.webhook_url });
+                                relayedMessage = await webhookClient.send(fallbackPayload);
+                            }
+                        } catch (fallbackError) {
+                            console.error(`[RELAY] FAILED on fallback attempt for message ${message.id}:`, fallbackError);
                         }
                     } else {
+                        // Re-throw other send errors to be caught by the main loop's catch block.
                         throw sendError;
                     }
                 }
