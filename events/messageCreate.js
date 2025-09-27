@@ -6,7 +6,7 @@ const { isSupporter, getSupporterSet } = require('../utils/supporterManager.js')
 const { getRateLimitDayString, RESET_HOUR_UTC } = require('../utils/time.js');
 
 const webhookCache = new Collection();
-const MAX_FILE_SIZE = 8 * 1024 * 1024;
+const MAX_PAYLOAD_SIZE = 8 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
 const RATE_LIMIT_CHARS = 200000;
 const DISCORD_MESSAGE_LIMIT = 2000;
