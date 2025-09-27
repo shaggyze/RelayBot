@@ -168,6 +168,12 @@ module.exports = {
                       finalContent = `*(A role in the original message was not relayed because it has not been mapped in this server. An admin can use \`/relay map_role\` to fix this.)*`;
                 }
 
+                // The warning for large files is now correctly appended to the main message content.
+                if (largeFiles.length > 0) {
+                    const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
+                    finalContent += fileNotice;
+                }
+
                 // Note: We calculate largeFiles later, so the warning will be in a follow-up if needed.
                 if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
                     const truncationNotice = `\n*(Message was truncated...)*`;
@@ -239,16 +245,6 @@ module.exports = {
                         // Re-throw other send errors to be caught by the main loop's catch block.
                         throw sendError;
                     }
-                }
-
-                // STEP 5: Send a follow-up message for any oversized files.
-                if (largeFiles.length > 0) {
-                    const fileNotice = `*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
-                    await webhookClient.send({
-                        content: fileNotice,
-                        username: username,
-                        avatarURL: avatarURL
-                    });
                 }
 
                 if (relayedMessage) {
