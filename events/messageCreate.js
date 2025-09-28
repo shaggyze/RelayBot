@@ -169,6 +169,7 @@ module.exports = {
                 }
 
                 // The warning for large files is now correctly appended to the main message content.
+                const largeFiles = [];
                 if (largeFiles.length > 0) {
                     const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
                     finalContent += fileNotice;
@@ -200,7 +201,6 @@ module.exports = {
 
                 // STEP 3: Intelligently pack files into the remaining budget.
                 const safeFiles = [];
-                const largeFiles = [];
                 let currentTotalSize = 0;
                 const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
 
