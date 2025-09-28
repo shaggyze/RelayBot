@@ -102,15 +102,24 @@ module.exports = {
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
                 if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
-                const allLinks = db.prepare('SELECT guild_id, channel_id FROM linked_channels WHERE group_id = ?').all(group.group_id);
+
+                // [THE FIX - PART 1] Fetch the direction along with the other data.
+                const allLinks = db.prepare('SELECT guild_id, channel_id, direction FROM linked_channels WHERE group_id = ?').all(group.group_id);
+                
                 const guildsToChannels = new Map();
-                if (!guildsToChannels.has(group.owner_guild_id)) { guildsToChannels.set(group.owner_guild_id, []); }
-                for (const link of allLinks) {
-                    if (!guildsToChannels.has(link.guild_id)) { guildsToChannels.set(link.guild_id, []); }
-                    guildsToChannels.get(link.guild_id).push(link.channel_id);
+                if (!guildsToChannels.has(group.owner_guild_id)) {
+                    guildsToChannels.set(group.owner_guild_id, []);
                 }
+                for (const link of allLinks) {
+                    if (!guildsToChannels.has(link.guild_id)) {
+                        guildsToChannels.set(link.guild_id, []);
+                    }
+                    // Store the channel ID and direction together as an object.
+                    guildsToChannels.get(link.guild_id).push({ id: link.channel_id, dir: link.direction });
+                }
+                
                 let description = '';
-                for (const [guildId, channelIds] of guildsToChannels.entries()) {
+                for (const [guildId, channelInfos] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
                     if (guild) {
                         const memberCount = guild.memberCount;
@@ -119,10 +128,13 @@ module.exports = {
                     } else {
                         description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
                     }
-                    if (channelIds.length > 0) {
-                        for (const cid of channelIds) {
-                            const channel = interaction.client.channels.cache.get(cid);
-                            description += `  └─ ${channel ? `<#${cid}> (#${channel.name})` : `Inaccessible Channel (ID: \`${cid}\`)`}\n`;
+                    
+                    if (channelInfos.length > 0) {
+                        for (const info of channelInfos) {
+                            const channel = interaction.client.channels.cache.get(info.id);
+                            // [THE FIX - PART 2] Append the direction to the output string.
+                            const directionFormatted = `(Direction: **${info.dir}**)`;
+                            description += `  └─ ${channel ? `<#${info.id}> (#${channel.name})` : `Inaccessible Channel (ID: \`${info.id}\`)`} ${directionFormatted}\n`;
                         }
                     } else {
                         description += `  └─ *(No channels linked from this server)*\n`;

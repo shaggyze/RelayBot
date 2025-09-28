@@ -228,7 +228,7 @@ module.exports = {
                     // [THE DEFINITIVE FIX]
                     // The sticker fallback logic now correctly uses 'finalPayload'.
                     if (sendError.code === 50006 && finalPayload.stickers) {
-                        console.warn(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
+                        console.log(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
                         try {
                             const sticker = message.stickers.first();
                             if (sticker && sticker.name) {
