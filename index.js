@@ -14,7 +14,10 @@ const client = new Client({
         GatewayIntentBits.GuildWebhooks,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.GuildMembers
-    ]
+    ],
+    rest: {
+        retries: 3,
+    },
 });
 
 // Command Handling
