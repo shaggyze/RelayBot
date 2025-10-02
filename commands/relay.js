@@ -27,6 +27,21 @@ module.exports = {
             return await interaction.reply({ content: 'This command can only be used inside a server.', ephemeral: true });
         }
 
+        const requiredPermissions = [PermissionFlagsBits.ManageWebhooks, PermissionFlagsBits.ManageRoles];
+        const missingPermissions = requiredPermissions.filter(p => !interaction.guild.members.me.permissions.has(p));
+        if (missingPermissions.length > 0) {
+            const missingPermsString = missingPermissions.map(p => {
+                if (p === PermissionFlagsBits.ManageWebhooks) return '`Manage Webhooks`';
+                if (p === PermissionFlagsBits.ManageRoles) return '`Manage Roles`';
+            }).join(', ');
+            const errorEmbed = new EmbedBuilder()
+                .setColor('#ED4245')
+                .setTitle('Missing Bot Permissions')
+                .setDescription(`I cannot execute commands correctly because I am missing server-wide permissions: **${missingPermsString}**.`)
+                .addFields({ name: 'How to Fix', value: 'An admin needs to go to `Server Settings` > `Roles`, find my role ("RelayBot"), and enable these permissions.' });
+            return await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+        }
+
         const subcommand = interaction.options.getSubcommand();
         const guildId = interaction.guild.id;
         const channelId = interaction.channel.id;
