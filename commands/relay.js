@@ -27,17 +27,6 @@ module.exports = {
             return await interaction.reply({ content: 'This command can only be used inside a server.', ephemeral: true });
         }
 
-        const botPermissions = interaction.appPermissions;
-        if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks) || !botPermissions.has(PermissionFlagsBits.ManageRoles)) {
-            const errorEmbed = new EmbedBuilder()
-                .setColor('#ED4245')
-                .setTitle('Missing Bot Permissions')
-                .setDescription(`I cannot execute commands correctly because I am missing required permissions in this channel.`)
-                .addFields({ name: 'Required', value: '`Manage Webhooks`, `Manage Roles`' }, { name: 'How to Fix', value: 'An admin needs to ensure my role has these permissions enabled for this channel.' });
-            return await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
-        }
-
-
         const subcommand = interaction.options.getSubcommand();
         const guildId = interaction.guild.id;
         const channelId = interaction.channel.id;
