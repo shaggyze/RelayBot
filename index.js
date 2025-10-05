@@ -1,10 +1,32 @@
-// index.js
+// index.js - DIAGNOSTIC VERSION
+
+// [DIAGNOSTIC] Add global error handlers to catch anything that slips through.
+process.on('uncaughtException', (err, origin) => {
+    console.error('!!!!!!!!!! UNCAUGHT EXCEPTION !!!!!!!!!');
+    console.error(`Caught exception: ${err}\n` + `Exception origin: ${origin}`);
+    console.error(err.stack);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('!!!!!!!!!! UNHANDLED REJECTION !!!!!!!!!');
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+
+console.log('[DEBUG] index.js starting...');
+
 require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
 
-require('./db/database.js');
+try {
+    console.log('[DEBUG] Requiring database...');
+    require('./db/database.js');
+    console.log('[DEBUG] Database require() successful.');
+} catch (error) {
+    console.error('[FATAL-CRASH] The application crashed while loading the database file.', error);
+    process.exit(1); // Exit immediately if the DB fails
+}
 
 const client = new Client({
     intents: [
@@ -20,33 +42,49 @@ const client = new Client({
     },
 });
 
-// Command Handling
-client.commands = new Collection();
-const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-
-for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
-    if ('data' in command && 'execute' in command) {
-        client.commands.set(command.data.name, command);
-    } else {
-        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+try {
+    console.log('[DEBUG] Loading commands...');
+    client.commands = new Collection();
+    const commandsPath = path.join(__dirname, 'commands');
+    const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+    for (const file of commandFiles) {
+        const filePath = path.join(commandsPath, file);
+        const command = require(filePath);
+        if ('data' in command && 'execute' in command) {
+            client.commands.set(command.data.name, command);
+        }
     }
+    console.log(`[DEBUG] Successfully loaded ${client.commands.size} commands.`);
+} catch (error) {
+    console.error('[FATAL-CRASH] The application crashed while loading commands.', error);
+    process.exit(1);
 }
 
-// Event Handling
-const eventsPath = path.join(__dirname, 'events');
-const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
-
-for (const file of eventFiles) {
-    const filePath = path.join(eventsPath, file);
-    const event = require(filePath);
-    if (event.once) {
-        client.once(event.name, (...args) => event.execute(...args));
-    } else {
-        client.on(event.name, (...args) => event.execute(...args));
+try {
+    console.log('[DEBUG] Loading events...');
+    const eventsPath = path.join(__dirname, 'events');
+    const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
+    for (const file of eventFiles) {
+        const filePath = path.join(eventsPath, file);
+        const event = require(filePath);
+        if (event.once) {
+            client.once(event.name, (...args) => event.execute(...args));
+        } else {
+            client.on(event.name, (...args) => event.execute(...args));
+        }
     }
+    console.log(`[DEBUG] Successfully loaded ${eventFiles.length} events.`);
+} catch (error) {
+    console.error('[FATAL-CRASH] The application crashed while loading events.', error);
+    process.exit(1);
 }
 
-client.login(process.env.DISCORD_TOKEN);
+try {
+    console.log('[DEBUG] Attempting to log in...');
+    client.login(process.env.DISCORD_TOKEN);
+} catch (error) {
+    console.error('[FATAL-CRASH] The application crashed during the client.login() call.', error);
+    process.exit(1);
+}
+
+console.log('[DEBUG] index.js has finished executing. Awaiting login confirmation from the "ready" event...');
