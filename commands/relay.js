@@ -89,13 +89,28 @@ module.exports = {
 
             } else if (subcommand === 'unlink_channel') {
                 await interaction.deferReply({ ephemeral: true });
-                const link = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (!link) return interaction.editReply({ content: `This channel is not linked to any relay group.` });
-                const webhooks = await interaction.channel.fetchWebhooks();
-                const webhookToDelete = webhooks.find(wh => wh.url === link.webhook_url);
-                if (webhookToDelete) await webhookToDelete.delete('Relay channel unlinked.');
+
+                const link = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
+                if (!link) {
+                    return interaction.editReply({ content: `This channel is not linked to any relay group.` });
+                }
+
+                let deletedCount = 0;
+                try {
+                    const webhooks = await interaction.channel.fetchWebhooks();
+                    for (const webhook of webhooks.values()) {
+                        if (webhook.owner.id === interaction.client.user.id) {
+                            await webhook.delete('Relay channel unlinked.');
+                            deletedCount++;
+                        }
+                    }
+                } catch (error) {
+                    console.error(`[UNLINK] Could not fetch or delete webhooks in channel ${channelId}:`, error.message);
+                }
+
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelId);
-                await interaction.editReply({ content: `✅ This channel has been unlinked from its group.` });
+                
+                await interaction.editReply({ content: `✅ This channel has been unlinked. Found and deleted ${deletedCount} bot-owned webhook(s).` });
 
             } else if (subcommand === 'list_servers') {
                 await interaction.deferReply({ ephemeral: true });
