@@ -14,7 +14,7 @@ async function primeMemberCache(client) {
             await guild.members.fetch();
             console.log(`[Cache] Successfully cached members for "${guild.name}".`);
         } catch (error) {
-            console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). This may be due to API load or missing permissions. The daily task will rely on a partial cache for this guild. Error: ${error.message}`);
+            console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). Error: ${error.message}`);
         }
     }
     console.log('[Cache] Background member cache priming complete.');
@@ -39,16 +39,18 @@ async function runDailyVoteReminder(client) {
 
     for (const guildInfo of allLinkedGuilds) {
         let hasSupporter = false;
-        let guild; // Define guild in the outer scope so the catch block can access it
+        let guild;
 
         try {
             guild = await client.guilds.fetch(guildInfo.guild_id);
             if (!guild) {
-                // This case should be caught by the error handler below, but it's good practice.
+                db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildInfo.guild_id);
+                db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildInfo.guild_id);
+                db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildInfo.guild_id);
                 continue;
             }
 
-            const members = await guild.members.fetch({ time: 120000 }); // Keep the 2-minute timeout
+            const members = await guild.members.fetch({ time: 120000 });
             hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
             console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
 
@@ -56,25 +58,20 @@ async function runDailyVoteReminder(client) {
             const guildId = guildInfo.guild_id;
             const guildName = guild ? guild.name : `Unknown Guild (${guildId})`;
 
-            // [NEW AUTO-CLEANUP LOGIC]
-            // DiscordAPIError code 10004 is "Unknown Guild".
             if (error.code === 10004) {
-                console.warn(`[Tasks] [AUTO-CLEANUP] Guild ${guildId} is unknown (bot was likely kicked or server deleted). Pruning all associated data from the database.`);
+                console.warn(`[Tasks] [AUTO-CLEANUP] Guild ${guildId} is unknown. Pruning data.`);
                 db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
                 db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
                 db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
-                // Since we've cleaned up, there's nothing more to do with this guild in this loop.
-                continue; // This skips the hasSupporter check and sending logic for this iteration.
+                continue;
             }
             
-            // Keep the existing timeout handling.
             if (error.code === 'GuildMembersTimeout') {
-                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time. Skipping this server as a precaution.`);
+                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time.`);
             } else {
                 console.error(`[Tasks] [ERROR] FAILED to process guild "${guildName}". Error: ${error.message}`);
             }
             
-            // As a safety measure, we will assume a supporter is present and skip this guild if we can't check it properly.
             hasSupporter = true;
         }
 
@@ -91,10 +88,7 @@ async function runDailyVoteReminder(client) {
         return;
     }
     
-    const channelsToSendTo = db.prepare(`
-        SELECT channel_id, webhook_url FROM linked_channels 
-        WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})
-    `).all();
+    const channelsToSendTo = db.prepare(`SELECT channel_id, webhook_url FROM linked_channels WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})`).all();
 
     console.log(`[Tasks] Sending reminders to ${channelsToSendTo.length} channel(s) across ${guildsWithoutSupporters.size} server(s).`);
 
@@ -115,14 +109,11 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
-// This is the simple, self-correcting scheduler function.
 function scheduleNextNoonTask(client) {
     const now = new Date();
     const nextRun = new Date();
-    
-    // Set the target time in UTC. 12:00 PM in Las Vegas (PDT, UTC-7) is 19:00 UTC.
     const targetUtcHour = 19;
-    const targetUtcMinute = 0; // Set to 0 for exactly noon
+    const targetUtcMinute = 0;
     nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
 
     if (now > nextRun) {
@@ -130,7 +121,6 @@ function scheduleNextNoonTask(client) {
     }
 
     const delay = nextRun.getTime() - now.getTime();
-    
     console.log(`[Scheduler] Next daily vote reminder scheduled for: ${nextRun.toUTCString()}`);
     console.log(`[Scheduler] Will run in ${(delay / 1000 / 60 / 60).toFixed(2)} hours.`);
 
@@ -148,12 +138,8 @@ module.exports = {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
         
-        // [THE DEFINITIVE FIX]
-        // Start the cache priming process, but DO NOT await it.
-        // This lets the bot become responsive to commands immediately.
         primeMemberCache(client);
 
-        // --- Supporter Cache Initialization and Refresh Timer ---
         await fetchSupporterIds();
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
@@ -174,6 +160,29 @@ module.exports = {
                 }).catch(() => {});
             }
         }, 15 * 60 * 1000);
+        
+        // [THE FIX] Add the new, separate pruning task.
+        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+        setInterval(() => {
+            console.log('[DB-Prune] Starting daily database pruning task...');
+            try {
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - 7);
+                const cutoffDayString = cutoffDate.toISOString().slice(0, 10);
+
+                // Use Discord's epoch for snowflake comparison (more accurate)
+                const discordEpoch = 1420070400000;
+                const cutoffTimestamp = cutoffDate.getTime();
+                const discordEpochCutoff = (cutoffTimestamp - discordEpoch) << 22;
+
+                const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(discordEpochCutoff.toString());
+                const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
+
+                console.log(`[DB-Prune] Success! Pruned ${resultMessages.changes} old message links and ${resultStats.changes} old daily stats.`);
+            } catch (error) {
+                console.error('[DB-Prune] An error occurred during the daily pruning task:', error);
+            }
+        }, twentyFourHoursInMs);
         
         scheduleNextNoonTask(client);
     },

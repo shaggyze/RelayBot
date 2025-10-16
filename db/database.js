@@ -92,7 +92,7 @@ const migrations = [
             );
         `
     },
-    // [NEW] Version 6: Upgrades group_stats for rate limiting.
+    // Version 6: Upgrades group_stats for rate limiting.
     {
         version: 6,
         up: `
@@ -105,21 +105,26 @@ const migrations = [
                 FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE,
                 UNIQUE(group_id, day)
             );
-            
-            -- Copy existing data from the old table to the new one.
             INSERT INTO group_stats_new (group_id, day, character_count)
             SELECT group_id, day, character_count
             FROM group_stats;
-
             DROP TABLE group_stats;
             ALTER TABLE group_stats_new RENAME TO group_stats;
         `
     },
-	// [NEW] Version 7: Adds a column to track replies for edit syncing.
+	// Version 7: Adds a column to track replies for edit syncing.
     {
         version: 7,
         up: `
             ALTER TABLE relayed_messages ADD COLUMN replied_to_id TEXT;
+        `
+    },
+    // [NEW] Version 8: Adds indexes for efficient pruning of old data.
+    {
+        version: 8,
+        up: `
+            CREATE INDEX IF NOT EXISTS idx_relayed_messages_original_id ON relayed_messages(original_message_id);
+            CREATE INDEX IF NOT EXISTS idx_group_stats_day ON group_stats(day);
         `
     }
 ];
@@ -142,6 +147,8 @@ if (currentVersion < latestVersion) {
             CREATE TABLE role_mappings (mapping_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, guild_id TEXT NOT NULL, role_name TEXT NOT NULL, role_id TEXT NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, guild_id, role_name));
             CREATE TABLE relayed_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, original_message_id TEXT NOT NULL, original_channel_id TEXT NOT NULL, relayed_message_id TEXT NOT NULL, relayed_channel_id TEXT NOT NULL, webhook_url TEXT NOT NULL, replied_to_id TEXT);
             CREATE TABLE group_stats (stat_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, day TEXT NOT NULL, character_count INTEGER NOT NULL DEFAULT 0, warning_sent_at INTEGER, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, day));
+            CREATE INDEX idx_relayed_messages_original_id ON relayed_messages(original_message_id);
+            CREATE INDEX idx_group_stats_day ON group_stats(day);
         `;
         try {
             db.exec(latestSchema);
