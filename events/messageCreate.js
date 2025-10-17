@@ -156,6 +156,7 @@ module.exports = {
                         finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                     }
 
+                                        // 1. Build the payload with everything EXCEPT files first.
                     const payloadWithoutFiles = {
                         content: finalContent,
                         username: username,
@@ -170,9 +171,11 @@ module.exports = {
                         if (sticker && sticker.id) payloadWithoutFiles.stickers = [sticker.id];
                     }
 
+                    // 2. Calculate the size of the text/embed part and determine the file budget.
                     const jsonSize = Buffer.byteLength(JSON.stringify(payloadWithoutFiles));
                     const fileBudget = MAX_PAYLOAD_SIZE - jsonSize;
 
+                    // 3. Intelligently pack files that fit into the budget.
                     const safeFiles = [];
                     const largeFiles = [];
                     let currentTotalSize = 0;
@@ -187,7 +190,19 @@ module.exports = {
                         }
                     }
 
-                    const finalPayload = { ...payloadWithoutFiles, files: safeFiles };
+                    // 4. Assemble the final text content, including the large file notice, and truncate it.
+                    let finalPayloadContent = payloadWithoutFiles.content;
+                    if (largeFiles.length > 0) {
+                        const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
+                        finalPayloadContent += fileNotice;
+                    }
+                    if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
+                        const truncationNotice = `\n*(Message was truncated...)*`;
+                        finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
+                    }
+
+                    // 5. Assemble the final payload for sending.
+                    const finalPayload = { ...payloadWithoutFiles, content: finalPayloadContent, files: safeFiles };
 
                     if (!finalPayload.content.trim() && finalPayload.files.length === 0 && finalPayload.embeds.length === 0 && !finalPayload.stickers) {
                         continue;

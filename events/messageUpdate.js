@@ -55,25 +55,15 @@ async function rebuildAndEdit(client, originalMessageId) {
                     finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                 }
 
-                // [THE DEFINITIVE FIX] - Rebuild the payload with all safety checks.
                 const payload = {
                     content: finalContent,
                     username: username,
                     avatarURL: avatarURL,
                     embeds: [],
-                    // Note: Files cannot be re-sent in an edit, so we don't include them.
-                    files: [],
                     allowedMentions: { parse: ['roles'], repliedUser: false }
                 };
                 if (replyEmbed) payload.embeds.push(replyEmbed);
                 payload.embeds.push(...originalMessage.embeds);
-
-                if (originalMessage.stickers.size > 0) {
-                    const sticker = originalMessage.stickers.first();
-                    if (sticker && sticker.id) {
-                        payload.stickers = [sticker.id];
-                    }
-                }
 
                 try {
                     const webhookClient = new WebhookClient({ url: relayed.webhook_url });
