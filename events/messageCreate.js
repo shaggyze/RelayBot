@@ -156,42 +156,38 @@ module.exports = {
                         finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                     }
 
-                                        // 1. Build the payload with everything EXCEPT files first.
-                    const payloadWithoutFiles = {
+                    const basePayload = {
                         content: finalContent,
                         username: username,
                         avatarURL: avatarURL,
                         embeds: [],
                         allowedMentions: { parse: ['roles'], repliedUser: false }
                     };
-                    if (replyEmbed) payloadWithoutFiles.embeds.push(replyEmbed);
-                    payloadWithoutFiles.embeds.push(...message.embeds);
+                    if (replyEmbed) basePayload.embeds.push(replyEmbed);
+                    basePayload.embeds.push(...message.embeds);
                     if (message.stickers.size > 0) {
                         const sticker = message.stickers.first();
-                        if (sticker && sticker.id) payloadWithoutFiles.stickers = [sticker.id];
+                        if (sticker && sticker.id) basePayload.stickers = [sticker.id];
                     }
 
-                    // 2. Calculate the size of the text/embed part and determine the file budget.
-                    const jsonSize = Buffer.byteLength(JSON.stringify(payloadWithoutFiles));
-                    const fileBudget = MAX_PAYLOAD_SIZE - jsonSize;
-
-                    // 3. Intelligently pack files that fit into the budget.
+                    // 2. Intelligently pack files using an iterative budget check.
                     const safeFiles = [];
                     const largeFiles = [];
-                    let currentTotalSize = 0;
+                    let currentJsonSize = Buffer.byteLength(JSON.stringify(basePayload));
+                    let currentFileSize = 0;
                     const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
 
                     for (const attachment of sortedAttachments) {
-                        if (currentTotalSize + attachment.size <= fileBudget) {
+                        if (currentJsonSize + currentFileSize + attachment.size <= MAX_PAYLOAD_SIZE) {
                             safeFiles.push(attachment.url);
-                            currentTotalSize += attachment.size;
+                            currentFileSize += attachment.size;
                         } else {
                             largeFiles.push(attachment.name);
                         }
                     }
 
-                    // 4. Assemble the final text content, including the large file notice, and truncate it.
-                    let finalPayloadContent = payloadWithoutFiles.content;
+                    // 3. Add the large file notice *after* packing is complete and truncate.
+                    let finalPayloadContent = basePayload.content;
                     if (largeFiles.length > 0) {
                         const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
                         finalPayloadContent += fileNotice;
@@ -201,9 +197,9 @@ module.exports = {
                         finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                     }
 
-                    // 5. Assemble the final payload for sending.
-                    const finalPayload = { ...payloadWithoutFiles, content: finalPayloadContent, files: safeFiles };
-
+                    // 4. Assemble the final payload for sending.
+                    const finalPayload = { ...basePayload, content: finalPayloadContent, files: safeFiles };
+                    
                     if (!finalPayload.content.trim() && finalPayload.files.length === 0 && finalPayload.embeds.length === 0 && !finalPayload.stickers) {
                         continue;
                     }
