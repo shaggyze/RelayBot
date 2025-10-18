@@ -166,16 +166,34 @@ module.exports = {
         setInterval(() => {
             console.log('[DB-Prune] Starting daily database pruning task...');
             try {
-                const cutoffDate = new Date();
-                cutoffDate.setDate(cutoffDate.getDate() - 7);
-                const cutoffDayString = cutoffDate.toISOString().slice(0, 10);
+const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - 7); // Prune messages older than 7 days
 
-                // Use Discord's epoch for snowflake comparison (more accurate)
-                const discordEpoch = 1420070400000;
-                const cutoffTimestamp = cutoffDate.getTime();
-                const discordEpochCutoff = (cutoffTimestamp - discordEpoch) << 22;
+                // For group_stats, we use the date string directly.
+                const cutoffDayString = cutoffDate.toISOString().slice(0, 10); // 'YYYY-MM-DD'
 
-                const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(discordEpochCutoff.toString());
+                // For relayed_messages, we need to compare original_message_id (TEXT Snowflake ID)
+                // with a cutoff ID derived from the same date.
+                // Discord Snowflakes are 64-bit integers. JavaScript Numbers can lose precision
+                // for values > Number.MAX_SAFE_INTEGER (2^53 - 1).
+                // Bitwise operations in JS are performed on 32-bit integers.
+                // We must use BigInt for accurate Snowflake calculations.
+
+                const discordEpoch = 1420070400000n; // Discord's epoch in BigInt
+                const cutoffTimestamp = BigInt(cutoffDate.getTime()); // Current date's timestamp in BigInt
+
+                // Calculate the Snowflake ID equivalent for the cutoff date.
+                // The formula is (timestamp - discordEpoch) << 22 (timestamp part is 42 bits, starts at bit 22)
+                const timestampPart = cutoffTimestamp - discordEpoch;
+                const discordEpochCutoffBigInt = (timestampPart << 22n); // Use BigInt for bit shift
+
+                // Convert the BigInt cutoff ID to a string for the SQL query.
+                const cutoffIdString = discordEpochCutoffBigInt.toString();
+
+                console.log(`[DB-Prune] Pruning relayed_messages older than Snowflake ID: ${cutoffIdString}`);
+                const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
+                
+                console.log(`[DB-Prune] Pruning group_stats for days older than: ${cutoffDayString}`);
                 const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
 
                 console.log(`[DB-Prune] Success! Pruned ${resultMessages.changes} old message links and ${resultStats.changes} old daily stats.`);
