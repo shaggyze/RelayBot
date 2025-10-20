@@ -180,17 +180,17 @@ module.exports = {
                     const largeFiles = []; // Store name and size for logging
                     const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
 
-                    console.error(`--- PAYLOAD DEBUG START (Message ID: ${message.id}) ---`);
-                    console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
-                    console.error(`[DEBUG] Original Message Content Length: ${message.content ? message.content.length : 0}`);
-                    console.error(`[DEBUG] Attachments: ${message.attachments.size}`);
-                    console.error(`[DEBUG] Embeds: ${message.embeds.length}`);
-                    console.error(`[DEBUG] Stickers: ${message.stickers.size} (ID: ${stickerId || 'None'})`);
-                    console.error(`[DEBUG] Initial JSON Size (before file notice, includes embeds, metadata): ${initialJsonSize} bytes`);
+                    //console.error(`--- PAYLOAD DEBUG START (Message ID: ${message.id}) ---`);
+                    //console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
+                    //console.error(`[DEBUG] Original Message Content Length: ${message.content ? message.content.length : 0}`);
+                    //console.error(`[DEBUG] Attachments: ${message.attachments.size}`);
+                    //console.error(`[DEBUG] Embeds: ${message.embeds.length}`);
+                    //console.error(`[DEBUG] Stickers: ${message.stickers.size} (ID: ${stickerId || 'None'})`);
+                    //console.error(`[DEBUG] Initial JSON Size (before file notice, includes embeds, metadata): ${initialJsonSize} bytes`);
                     
-                    console.error(`[DEBUG] Processing Attachments (Total: ${sortedAttachments.length}):`);
+                    //console.error(`[DEBUG] Processing Attachments (Total: ${sortedAttachments.length}):`);
                     sortedAttachments.forEach((att, index) => {
-                        console.error(`  - Attachment ${index+1}: ${att.name} | Size: ${att.size} bytes`);
+                        //console.error(`  - Attachment ${index+1}: ${att.name} | Size: ${att.size} bytes`);
                         if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
                             safeFiles.push(att.url);
                             currentFileSize += att.size;
@@ -198,18 +198,18 @@ module.exports = {
                             largeFiles.push({ name: att.name, size: att.size });
                         }
                     });
-                    console.error(`[DEBUG] Files selected for upload (${safeFiles.length}):`);
+                    //console.error(`[DEBUG] Files selected for upload (${safeFiles.length}):`);
                     safeFiles.forEach(url => console.error(`  - ${url.substring(url.lastIndexOf('/') + 1)}`));
-                    console.error(`[DEBUG] Files skipped due to size (${largeFiles.length}):`);
+                    //console.error(`[DEBUG] Files skipped due to size (${largeFiles.length}):`);
                     largeFiles.forEach(f => console.error(`  - ${f.name} (Size: ${f.size} bytes)`));
-                    console.error(`[DEBUG] Total size of selected files: ${currentFileSize} bytes`);
+                    //console.error(`[DEBUG] Total size of selected files: ${currentFileSize} bytes`);
 
                     let fileNoticeString = "";
                     if (largeFiles.length > 0) {
                         fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})*`;
-                        console.error(`[DEBUG] File Notice String Length: ${fileNoticeString.length} chars | Size: ${Buffer.byteLength(fileNoticeString, 'utf8')} bytes`);
+                        //console.error(`[DEBUG] File Notice String Length: ${fileNoticeString.length} chars | Size: ${Buffer.byteLength(fileNoticeString, 'utf8')} bytes`);
                     } else {
-                        console.error(`[DEBUG] No file notice needed.`);
+                        //console.error(`[DEBUG] No file notice needed.`);
                     }
 
                     let finalPayloadContent = initialMessageContent + fileNoticeString;
@@ -224,11 +224,11 @@ module.exports = {
                         // For now, assume initialMessageContent is already handled for DISCORD_MESSAGE_LIMIT if needed.
                         // So we truncate finalPayloadContent directly.
                         finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
-                        console.error(`[DEBUG] Final content truncated due to DISCORD_MESSAGE_LIMIT. New Length: ${finalPayloadContent.length}`);
+                        //console.error(`[DEBUG] Final content truncated due to DISCORD_MESSAGE_LIMIT. New Length: ${finalPayloadContent.length}`);
                     }
                     
                     const finalContentSize = Buffer.byteLength(finalPayloadContent, 'utf8');
-                    console.error(`[DEBUG] Final Content Size (after file notice & possible truncation): ${finalContentSize} bytes`);
+                    //console.error(`[DEBUG] Final Content Size (after file notice & possible truncation): ${finalContentSize} bytes`);
 
                     // Construct the base for the FINAL JSON payload calculation
                     const finalPayloadForJsonSize = {
@@ -243,13 +243,13 @@ module.exports = {
                     if (stickerId) finalPayloadForJsonSize.sticker_ids = [stickerId];
 
                     const finalJsonSize = Buffer.byteLength(JSON.stringify(finalPayloadForJsonSize));
-                    console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
+                    //console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
                     
                     const totalEstimatedDataSize = finalJsonSize + currentFileSize;
-                    console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
-                    console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
-                    console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
-                    console.error(`--- PAYLOAD DEBUG END ---`);
+                    //console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
+                    //console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
+                    //console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
+                    //console.error(`--- PAYLOAD DEBUG END ---`);
 
                     const finalPayload = { ...finalPayloadForJsonSize, files: safeFiles };
                     
@@ -281,14 +281,14 @@ module.exports = {
                         }
                     }
 
-                    if (largeFiles.length > 0) {
-                        const fileNotice = `*(Note: ${largeFiles.length} file(s) from the message above were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
-                        await webhookClient.send({
-                            content: fileNotice,
-                            username: username,
-                            avatarURL: avatarURL
-                        });
-                    }
+                    //if (largeFiles.length > 0) {
+                    //    const fileNotice = `*(Note: ${largeFiles.length} file(s) from the message above were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
+                    //    await webhookClient.send({
+                    //        content: fileNotice,
+                    //        username: username,
+                    //        avatarURL: avatarURL
+                    //    });
+                    //}
 
                     if (relayedMessage) {
                         db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
@@ -300,6 +300,11 @@ module.exports = {
                     if (error.code === 10015) {
                         console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
+                    } else if (sendError.code === 40005 {
+					console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
+                    console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
+                    console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
+                    console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
                     } else {
                         console.error(`[RELAY-LOOP-ERROR] FAILED to process relay for target #${targetChannelName}.`, error);
                     }

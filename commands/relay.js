@@ -139,7 +139,7 @@ module.exports = {
                     if (guild) {
                         const memberCount = guild.memberCount;
                         const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
-                        description += `• **${guild.name}** (${memberCount} Members / ${supporterCount} Supporters)\n`;
+                        description += `• **${guild.name}** (ID: \`${guildId}\`) (${memberCount} Members / ${supporterCount} Supporters)\n`;
                     } else {
                         description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
                     }
