@@ -23,13 +23,17 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('prune_db')
-                .setDescription('Removes orphaned server data and optionally inactive groups/webhooks.')
+                .setDescription('Removes orphaned data and optionally prunes old message history.')
                 .addBooleanOption(option =>
                     option.setName('include_inactive')
-                        .setDescription('Also prune groups with zero total character usage? (Default: False)'))
+                        .setDescription('Also prune groups with zero total character usage and orphaned webhooks? (Default: False)'))
                 .addIntegerOption(option =>
-                    option.setName('days')
-                        .setDescription('Also prune groups inactive for this many days.')))
+                    option.setName('days') // This remains for pruning GROUPS based on inactivity
+                        .setDescription('Also prune groups inactive for this many days.'))
+                // NEW OPTION FOR PRUNING MESSAGE HISTORY
+                .addIntegerOption(option =>
+                    option.setName('message_history_days')
+                        .setDescription('Prune relayed messages older than this many days (e.g., 30). Separate from group inactivity.')))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('upload_db')
@@ -158,9 +162,11 @@ module.exports = {
             } else if (subcommand === 'prune_db') {
                 await interaction.deferReply({ ephemeral: true });
                 const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
-                const inactiveDays = interaction.options.getInteger('days');
+                const inactiveGroupDays = interaction.options.getInteger('days'); // For pruning GROUPS based on inactivity days
+                const messageHistoryDays = interaction.options.getInteger('message_history_days'); // NEW: For pruning message history
 
                 let prunedGroups = 0, prunedLinks = 0, prunedMappings = 0, prunedWebhooks = 0;
+                let prunedMessages = 0, prunedStats = 0; // Variables for message history pruning
                 const prunedGuilds = [];
                 const groupIdsToDelete = new Set();
 
@@ -173,6 +179,7 @@ module.exports = {
                 const guildsToPrune = uniqueDbGuildIds.filter(id => id && !currentGuildIds.has(id));
 
                 if (guildsToPrune.length > 0) {
+                    console.log(`[Manual Prune] Found ${guildsToPrune.length} orphaned guild(s) to clean up.`);
                     for (const guildId of guildsToPrune) {
                         const groups = db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
                         const links = db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
@@ -182,80 +189,152 @@ module.exports = {
                         prunedMappings += mappings.changes;
                         prunedGuilds.push(guildId);
                     }
+                    console.log(`[Manual Prune] Cleaned up orphaned server data.`);
                 }
 
-                // --- 2. Prune Inactive Groups (if requested) ---
+                // --- 2. Prune Inactive Groups (if requested by 'include_inactive') ---
                 if (includeInactive) {
-                    const inactiveGroups = db.prepare(`SELECT rg.group_id FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0`).all();
-                    inactiveGroups.forEach(g => groupIdsToDelete.add(g.group_id));
+                    console.log(`[Manual Prune] Identifying groups with zero total character usage.`);
+                    // Using a subquery on group_stats to find groups with no entries or only zero entries.
+                    const groupsWithZeroUsage = db.prepare(`
+                        SELECT rg.group_id 
+                        FROM relay_groups rg 
+                        LEFT JOIN (
+                            SELECT group_id, SUM(character_count) as total_chars 
+                            FROM group_stats 
+                            GROUP BY group_id
+                        ) gs ON rg.group_id = gs.group_id 
+                        WHERE gs.total_chars IS NULL OR gs.total_chars = 0
+                    `).all();
+                    
+                    groupsWithZeroUsage.forEach(g => groupIdsToDelete.add(g.group_id));
+                    console.log(`[Manual Prune] Found ${groupsWithZeroUsage.length} groups with zero usage to be deleted.`);
                 }
 
-                // --- 3. Prune Stale Groups (if requested) ---
-                if (inactiveDays !== null && inactiveDays > 0) {
-                    const cutoffDate = new Date();
-                    cutoffDate.setDate(cutoffDate.getDate() - inactiveDays);
-                    const cutoffDateString = cutoffDate.toISOString().slice(0, 10);
+                // --- 3. Prune Stale Groups (if requested by 'days' option) ---
+                if (inactiveGroupDays !== null && inactiveGroupDays > 0) {
+                    console.log(`[Manual Prune] Identifying groups inactive for more than ${inactiveGroupDays} days.`);
+                    const cutoffDateForGroups = new Date();
+                    cutoffDateForGroups.setDate(cutoffDateForGroups.getDate() - inactiveGroupDays);
+                    const cutoffDateStringForGroups = cutoffDateForGroups.toISOString().slice(0, 10);
 
+                    // Groups that have NO entry in group_stats for a day >= cutoffDateStringForGroups
                     const staleGroups = db.prepare(`
-                        SELECT group_id FROM relay_groups WHERE group_id NOT IN (
+                        SELECT DISTINCT group_id FROM relay_groups 
+                        WHERE group_id NOT IN (
                             SELECT DISTINCT group_id FROM group_stats WHERE day >= ?
                         )
-                    `).all(cutoffDateString);
+                    `).all(cutoffDateStringForGroups);
+                    
                     staleGroups.forEach(g => groupIdsToDelete.add(g.group_id));
+                    console.log(`[Manual Prune] Found ${staleGroups.length} stale groups (based on days) to be deleted.`);
                 }
 
-                // Delete all collected inactive/stale groups
+                // Delete all collected inactive/stale groups from relay_groups
                 if (groupIdsToDelete.size > 0) {
                     const ids = Array.from(groupIdsToDelete);
-                    const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${ids.map(() => '?').join(',')})`);
+                    // Construct parameterized query safely
+                    const placeholders = ids.map(() => '?').join(',');
+                    const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${placeholders})`);
                     const result = stmt.run(...ids);
                     prunedGroups += result.changes;
+                    console.log(`[Manual Prune] Deleted ${result.changes} groups based on inactivity/zero usage.`);
                 }
 
                 // --- 4. Prune Orphaned Webhooks ---
+                // This cleanup runs if 'include_inactive' is true. It's a general cleanup for webhooks.
                 if (includeInactive) {
-                    const inactiveGroups = db.prepare(`SELECT rg.group_id FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id HAVING SUM(gs.character_count) IS NULL OR SUM(gs.character_count) = 0`).all();
-                    if (inactiveGroups.length > 0) {
-                        const idsToDelete = inactiveGroups.map(g => g.group_id);
-                        const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${idsToDelete.map(() => '?').join(',')})`);
-                        const result = stmt.run(...idsToDelete);
-                        prunedGroups += result.changes;
-                    }
-                    inactiveGroups.forEach(g => groupIdsToDelete.add(g.group_id));
-                }
-
-                const allDbWebhooks = new Set(db.prepare('SELECT webhook_url FROM linked_channels').all().map(r => r.webhook_url));
-                for (const guild of interaction.client.guilds.cache.values()) {
-                    try {
-                        if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageWebhooks)) continue;
-                        const webhooks = await guild.fetchWebhooks();
-                        for (const webhook of webhooks.values()) {
-                            if (webhook.owner.id === interaction.client.user.id && !allDbWebhooks.has(webhook.url)) {
-                                await webhook.delete('Pruning orphaned RelayBot webhook.');
-                                prunedWebhooks++;
+                    console.log(`[Manual Prune] Scanning for orphaned webhooks.`);
+                    const allDbWebhooks = new Set(db.prepare('SELECT webhook_url FROM linked_channels').all().map(r => r.webhook_url));
+                    let webhooksScannedInGuilds = 0;
+                    for (const guild of interaction.client.guilds.cache.values()) {
+                        try {
+                            // Ensure the bot has permissions to fetch webhooks
+                            if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageWebhooks)) continue;
+                            const webhooks = await guild.fetchWebhooks();
+                            for (const webhook of webhooks.values()) {
+                                // Check if it's a bot webhook owned by the current bot AND it's NOT listed in linked_channels.
+                                if (webhook.owner.id === interaction.client.user.id && !allDbWebhooks.has(webhook.url)) {
+                                    console.log(`[Manual Prune] Deleting orphaned webhook on guild ${guild.name} (${guild.id}). Hook: ${webhook.url}`);
+                                    await webhook.delete('Pruning orphaned RelayBot webhook.');
+                                    prunedWebhooks++;
+                                }
                             }
+                            webhooksScannedInGuilds++;
+                        } catch (error) {
+                            console.error(`[Manual Prune] Error fetching/deleting webhooks for guild ${guild.id}: ${error.message}`);
+                            // Silently fail or log; doesn't stop the whole process.
                         }
-                    } catch {}
+                    }
+                    console.log(`[Manual Prune] Scanned ${webhooksScannedInGuilds} guilds for orphaned webhooks.`);
+                }
+                
+                // --- NEW SECTION: Prune Old Message Links and Stats ---
+                if (messageHistoryDays !== null && messageHistoryDays > 0) {
+                    console.log(`[Manual Prune] Starting message history pruning for data older than ${messageHistoryDays} days.`);
+
+                    // Calculate cutoff values using BigInt for snowflakes
+                    const cutoffDate = new Date();
+                    cutoffDate.setDate(cutoffDate.getDate() - messageHistoryDays); // Prune data older than 'messageHistoryDays'
+
+                    // For group_stats: Prune based on the day string 'YYYY-MM-DD'
+                    const cutoffDayString = cutoffDate.toISOString().slice(0, 10);
+
+                    // For relayed_messages: Prune based on Snowflake ID. Use BigInt for accuracy.
+                    // Discord's epoch (Jan 1, 2015, 00:00:00 UTC) in milliseconds as BigInt
+                    const discordEpoch = 1420070400000n; 
+                    // Current date's timestamp in BigInt
+                    const cutoffTimestamp = BigInt(cutoffDate.getTime()); 
+                    // Calculate the cutoff Snowflake ID: (timestamp - discordEpoch) shifted left by 22 bits
+                    const discordEpochCutoffBigInt = (cutoffTimestamp - discordEpoch) << 22n; 
+                    const cutoffIdString = discordEpochCutoffBigInt.toString();
+
+                    console.log(`[Manual Prune] Pruning relayed_messages with original_message_id < ${cutoffIdString}`);
+                    const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
+                    prunedMessages = resultMessages.changes;
+                    console.log(`[Manual Prune] Deleted ${prunedMessages} relayed messages.`);
+
+                    //console.log(`[Manual Prune] Pruning group_stats with day < ${cutoffDayString}`);
+                    //const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
+                    //prunedStats = resultStats.changes;
+                    //console.log(`[Manual Prune] Deleted ${prunedStats} group stats entries.`);
                 }
 
-                // Build the final report embed
+                // --- Build the final report embed ---
                 const resultsEmbed = new EmbedBuilder()
-                    .setTitle('Database & Webhook Pruning Complete')
-                    .setColor('#5865F2')
-                    .setDescription(`Cleanup operation finished. Pruned data for **${prunedGuilds.length}** orphaned server(s).`)
+                    .setTitle('Database & Pruning Operations Complete')
+                    .setColor('#5865F2') // Discord's blurple color
+                    .setDescription(`Pruning tasks finished. Check logs for details.`)
                     .addFields(
-                        { name: 'Groups Deleted', value: `${prunedGroups}`, inline: true },
+                        { name: 'Orphaned Server Data', value: `Cleaned up data for **${prunedGuilds.length}** orphaned server(s).`, inline: true },
+                        { name: '\u200B', value: '\u200B', inline: true }, // Placeholder for spacing
+                        { name: '\u200B', value: '\u200B', inline: true },
+                        { name: 'Groups Deleted (Total)', value: `${prunedGroups}`, inline: true },
                         { name: 'Channel Links Deleted', value: `${prunedLinks}`, inline: true },
                         { name: 'Role Mappings Deleted', value: `${prunedMappings}`, inline: true },
                         { name: 'Orphaned Webhooks Pruned', value: `${prunedWebhooks}`, inline: true }
-                    )
-                    .setTimestamp();
+                    );
+
+                // Add message history pruning results only if the option was used
+                if (messageHistoryDays !== null && messageHistoryDays > 0) {
+                    resultsEmbed.addFields({
+                        name: `Message History (Older than ${messageHistoryDays} days)`,
+                        value: `Pruned **${prunedMessages}** message entries.`,
+                        inline: false // Full width for this field
+                    });
+                }
                 
                 if (prunedGuilds.length > 0) {
-                    resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${prunedGuilds.join('\n')}\`\`\`` });
+                    // Optionally list the orphaned server IDs if the list is manageable
+                    const guildIdsString = prunedGuilds.join('\n');
+                    // Limit length if necessary, e.g., 1024 characters for embed field value
+                    const displayGuildIds = guildIdsString.length > 1000 ? guildIdsString.substring(0, 1000) + '\n...' : guildIdsString;
+                    resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${displayGuildIds}\`\`\``, inline: false });
                 }
                 
                 await interaction.editReply({ embeds: [resultsEmbed] });
+                console.log(`[Manual Prune] Summary Report: ${prunedGroups} groups, ${prunedLinks} links, ${prunedMappings} mappings, ${prunedWebhooks} webhooks, ${prunedMessages} messages, ${prunedStats} stats.`);
+
             } else if (subcommand === 'upload_db') {
                 await interaction.deferReply({ ephemeral: true });
 

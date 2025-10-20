@@ -145,63 +145,117 @@ module.exports = {
                         }
                     }
                 
-                    let finalContent = targetContent;
-                    const contentWithoutMentions = finalContent.replace(/<@!?&?#?(\d+)>/g, '').trim();
-                    if (contentWithoutMentions.length === 0 && hasUnmappedRoles) {
-                          finalContent = `*(A role in the original message was not relayed because it has not been mapped in this server. An admin can use \`/relay map_role\` to fix this.)*`;
+                    let initialMessageContent = targetContent; // Content *before* potential file notice
+                    if (initialMessageContent.length > DISCORD_MESSAGE_LIMIT) {
+                        const truncationNotice = `\n*(Message was truncated...)*`;
+                        initialMessageContent = initialMessageContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                     }
                     
-                    if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
-                        const truncationNotice = `\n*(Message was truncated...)*`;
-                        finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
-                    }
-
-                    const basePayload = {
-                        content: finalContent,
+                    const basePayloadForSizeCalc = {
+                        content: initialMessageContent, // Use content BEFORE fileNotice for initial calculation
                         username: username,
                         avatarURL: avatarURL,
-                        embeds: [],
+                        embeds: message.embeds, // Include embeds for accurate JSON size
                         allowedMentions: { parse: ['roles'], repliedUser: false }
                     };
-                    if (replyEmbed) basePayload.embeds.push(replyEmbed);
-                    basePayload.embeds.push(...message.embeds);
+                    // Add reply embed if it exists for size calculation
+                    if (replyEmbed) {
+                        basePayloadForSizeCalc.embeds.push(replyEmbed);
+                    }
+
+                    let stickerId = null;
                     if (message.stickers.size > 0) {
                         const sticker = message.stickers.first();
-                        if (sticker && sticker.id) basePayload.stickers = [sticker.id];
-                    }
-
-                    // 2. Intelligently pack files using an iterative budget check.
-                    const safeFiles = [];
-                    const largeFiles = [];
-                    let currentJsonSize = Buffer.byteLength(JSON.stringify(basePayload));
-                    let currentFileSize = 0;
-                    const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
-
-                    for (const attachment of sortedAttachments) {
-                        if (currentJsonSize + currentFileSize + attachment.size <= MAX_PAYLOAD_SIZE) {
-                            safeFiles.push(attachment.url);
-                            currentFileSize += attachment.size;
-                        } else {
-                            largeFiles.push(attachment.name);
+                        if (sticker && sticker.id) {
+                            stickerId = sticker.id;
+                            // Sticker ID itself adds minimal JSON overhead. We don't log sticker file size here.
                         }
                     }
+                    if (stickerId) basePayloadForSizeCalc.sticker_ids = [stickerId];
 
-                    // 3. Add the large file notice *after* packing is complete and truncate.
-                    let finalPayloadContent = basePayload.content;
+                    const initialJsonSize = Buffer.byteLength(JSON.stringify(basePayloadForSizeCalc));
+                    
+                    let currentFileSize = 0;
+                    const safeFiles = [];
+                    const largeFiles = []; // Store name and size for logging
+                    const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
+
+                    console.error(`--- PAYLOAD DEBUG START (Message ID: ${message.id}) ---`);
+                    console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
+                    console.error(`[DEBUG] Original Message Content Length: ${message.content ? message.content.length : 0}`);
+                    console.error(`[DEBUG] Attachments: ${message.attachments.size}`);
+                    console.error(`[DEBUG] Embeds: ${message.embeds.length}`);
+                    console.error(`[DEBUG] Stickers: ${message.stickers.size} (ID: ${stickerId || 'None'})`);
+                    console.error(`[DEBUG] Initial JSON Size (before file notice, includes embeds, metadata): ${initialJsonSize} bytes`);
+                    
+                    console.error(`[DEBUG] Processing Attachments (Total: ${sortedAttachments.length}):`);
+                    sortedAttachments.forEach((att, index) => {
+                        console.error(`  - Attachment ${index+1}: ${att.name} | Size: ${att.size} bytes`);
+                        if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
+                            safeFiles.push(att.url);
+                            currentFileSize += att.size;
+                        } else {
+                            largeFiles.push({ name: att.name, size: att.size });
+                        }
+                    });
+                    console.error(`[DEBUG] Files selected for upload (${safeFiles.length}):`);
+                    safeFiles.forEach(url => console.error(`  - ${url.substring(url.lastIndexOf('/') + 1)}`));
+                    console.error(`[DEBUG] Files skipped due to size (${largeFiles.length}):`);
+                    largeFiles.forEach(f => console.error(`  - ${f.name} (Size: ${f.size} bytes)`));
+                    console.error(`[DEBUG] Total size of selected files: ${currentFileSize} bytes`);
+
+                    let fileNoticeString = "";
                     if (largeFiles.length > 0) {
-                        const fileNotice = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
-                        finalPayloadContent += fileNotice;
+                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})*`;
+                        console.error(`[DEBUG] File Notice String Length: ${fileNoticeString.length} chars | Size: ${Buffer.byteLength(fileNoticeString, 'utf8')} bytes`);
+                    } else {
+                        console.error(`[DEBUG] No file notice needed.`);
                     }
+
+                    let finalPayloadContent = initialMessageContent + fileNoticeString;
+
+                    // Truncate final content if it exceeds Discord's message limit *after* adding fileNotice
                     if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
                         const truncationNotice = `\n*(Message was truncated...)*`;
+                        // We need to be careful not to double-truncate if initialMessageContent was already truncated.
+                        // The safest approach is to rebuild from the original message content if possible,
+                        // or ensure we truncate the correct part. For simplicity here, we truncate the potentially
+                        // combined content. A more robust solution might involve complex truncation logic.
+                        // For now, assume initialMessageContent is already handled for DISCORD_MESSAGE_LIMIT if needed.
+                        // So we truncate finalPayloadContent directly.
                         finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
+                        console.error(`[DEBUG] Final content truncated due to DISCORD_MESSAGE_LIMIT. New Length: ${finalPayloadContent.length}`);
                     }
+                    
+                    const finalContentSize = Buffer.byteLength(finalPayloadContent, 'utf8');
+                    console.error(`[DEBUG] Final Content Size (after file notice & possible truncation): ${finalContentSize} bytes`);
 
-                    // 4. Assemble the final payload for sending.
-                    const finalPayload = { ...basePayload, content: finalPayloadContent, files: safeFiles };
+                    // Construct the base for the FINAL JSON payload calculation
+                    const finalPayloadForJsonSize = {
+                        content: finalPayloadContent,
+                        username: username,
+                        avatarURL: avatarURL,
+                        embeds: [], // Rebuilding to be precise about what's sent
+                        allowedMentions: { parse: ['roles'], repliedUser: false }
+                    };
+                    if (replyEmbed) finalPayloadForJsonSize.embeds.push(replyEmbed);
+                    finalPayloadForJsonSize.embeds.push(...message.embeds);
+                    if (stickerId) finalPayloadForJsonSize.sticker_ids = [stickerId];
+
+                    const finalJsonSize = Buffer.byteLength(JSON.stringify(finalPayloadForJsonSize));
+                    console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
+                    
+                    const totalEstimatedDataSize = finalJsonSize + currentFileSize;
+                    console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
+                    console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
+                    console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
+                    console.error(`--- PAYLOAD DEBUG END ---`);
+
+                    const finalPayload = { ...finalPayloadForJsonSize, files: safeFiles };
                     
                     if (!finalPayload.content.trim() && finalPayload.files.length === 0 && finalPayload.embeds.length === 0 && !finalPayload.stickers) {
-                        continue;
+                        console.log(`[DEBUG] Payload is empty after processing. Skipping send.`);
+                        continue; // Skip if there's nothing to send
                     }
                     
                     let relayedMessage = null;

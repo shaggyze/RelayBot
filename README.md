@@ -144,6 +144,9 @@ npm install
 
   # Your Bot's Application/Client ID from the "General Information" page
   CLIENT_ID=YourBotClientIDGoesHere
+  
+  # The ID of your private/developer/support server
+  DEV_GUILD_ID=1397170407580237944
   ```
 
 **5. Deploy Slash Commands:**

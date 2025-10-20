@@ -166,7 +166,7 @@ module.exports = {
         setInterval(() => {
             console.log('[DB-Prune] Starting daily database pruning task...');
             try {
-const cutoffDate = new Date();
+                const cutoffDate = new Date();
                 cutoffDate.setDate(cutoffDate.getDate() - 7); // Prune messages older than 7 days
 
                 // For group_stats, we use the date string directly.
