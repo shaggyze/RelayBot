@@ -300,7 +300,7 @@ module.exports = {
                     if (error.code === 10015) {
                         console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
-                    } else if (sendError.code === 40005 {
+                    } else if (sendError.code === 40005) {
 					console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
                     console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
                     console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
