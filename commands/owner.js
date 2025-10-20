@@ -36,12 +36,12 @@ module.exports = {
                 // NEW OPTION TO CONTROL group_stats pruning
                 .addBooleanOption(option =>
                     option.setName('prune_stats')
-                        .setDescription('When pruning message history, also prune group_stats older than message_history_days? (Default: False)')))
+                        .setDescription('Also prune group_stats older than message_history_days? (Default: False)') // Shortened description
+                ))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('upload_db')
-                .setDescription('Uploads the database to your secure web server endpoint.'))
-        , // Added comma here for clarity in case of future subcommands
+                .setDescription('Uploads the database to your secure web server endpoint.')),
 
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
