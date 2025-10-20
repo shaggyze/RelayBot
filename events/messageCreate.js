@@ -29,6 +29,8 @@ async function checkGroupForSupporters(client, groupId) {
 module.exports = {
     name: Events.MessageCreate,
     async execute(message) {
+        let shouldLogVerbose = false; // Flag to control extensive logging for problematic payloads
+
         try {
             if (message.author.bot || !message.guild) return;
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
@@ -158,7 +160,6 @@ module.exports = {
                         embeds: message.embeds, // Include embeds for accurate JSON size
                         allowedMentions: { parse: ['roles'], repliedUser: false }
                     };
-                    // Add reply embed if it exists for size calculation
                     if (replyEmbed) {
                         basePayloadForSizeCalc.embeds.push(replyEmbed);
                     }
@@ -168,151 +169,267 @@ module.exports = {
                         const sticker = message.stickers.first();
                         if (sticker && sticker.id) {
                             stickerId = sticker.id;
-                            // Sticker ID itself adds minimal JSON overhead. We don't log sticker file size here.
                         }
                     }
-                    if (stickerId) basePayloadForSizeCalc.sticker_ids = [stickerId];
+                    if (stickerId) {
+                         basePayloadForSizeCalc.sticker_ids = [stickerId];
+                    }
 
                     const initialJsonSize = Buffer.byteLength(JSON.stringify(basePayloadForSizeCalc));
                     
                     let currentFileSize = 0;
                     const safeFiles = [];
-                    const largeFiles = []; // Store name and size for logging
+                    const largeFiles = []; 
                     const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
 
-                    //console.error(`--- PAYLOAD DEBUG START (Message ID: ${message.id}) ---`);
-                    //console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
-                    //console.error(`[DEBUG] Original Message Content Length: ${message.content ? message.content.length : 0}`);
-                    //console.error(`[DEBUG] Attachments: ${message.attachments.size}`);
-                    //console.error(`[DEBUG] Embeds: ${message.embeds.length}`);
-                    //console.error(`[DEBUG] Stickers: ${message.stickers.size} (ID: ${stickerId || 'None'})`);
-                    //console.error(`[DEBUG] Initial JSON Size (before file notice, includes embeds, metadata): ${initialJsonSize} bytes`);
-                    
-                    //console.error(`[DEBUG] Processing Attachments (Total: ${sortedAttachments.length}):`);
-                    sortedAttachments.forEach((att, index) => {
-                        //console.error(`  - Attachment ${index+1}: ${att.name} | Size: ${att.size} bytes`);
+                    // --- Assemble parts for potential verbose logging ---
+                    const logVerbosePayloadInfo = () => { // Define this helper within execute to access outer scope variables cleanly
+                        console.error(`--- PAYLOAD DEBUG START (Message ID: ${message.id}, Triggered by Skip/Error) ---`);
+                        console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
+                        console.error(`[DEBUG] Original Message Content Length: ${message.content ? message.content.length : 0}`); 
+                        console.error(`[DEBUG] Attachments: ${messageAttachments.size}`); // `messageAttachments` is not in scope here, need `message.attachments`
+                        console.error(`[DEBUG] Embeds: ${messageEmbeds.length}`); // `messageEmbeds` not in scope
+                        console.error(`[DEBUG] Stickers: ${messageStickers.size} (ID: ${stickerId || 'None'})`); // `messageStickers` not in scope
+                        console.error(`[DEBUG] Initial JSON Size (before file notice, includes embeds, metadata): ${initialJsonSize} bytes`);
+                        
+                        console.error(`[DEBUG] Processing Attachments (Total: ${sortedAttachments.length}):`); // sortedAttachments needs to be in scope
+                        sortedAttachments.forEach((att, index) => { // sortedAttachments needs to be in scope
+                            console.error(`  - Attachment ${index+1}: ${att.name} | Size: ${att.size} bytes`);
+                            // File selection logic within here is part of log setup.
+                            // No need to re-select. Use the already populated safeFiles/largeFiles from the loop below.
+                        });
+                        console.error(`[DEBUG] Files selected for upload (${safeFiles.length}):`);
+                        safeFiles.forEach(url => console.error(`  - ${url.substring(url.lastIndexOf('/') + 1)}`));
+                        console.error(`[DEBUG] Files skipped due to size (${largeFiles.length}):`);
+                        largeFiles.forEach(f => console.error(`  - ${f.name} (Size: ${f.size} bytes)`));
+                        console.error(`[DEBUG] Total size of selected files: ${currentFileSize} bytes`);
+
+                        let actualFileNoticeString = "";
+                        if (largeFiles.length > 0) {
+                            actualFileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})`;
+                            console.error(`[DEBUG] File Notice String Size: ${Buffer.byteLength(actualFileNoticeString, 'utf8')} bytes`);
+                        } else {
+                            console.error(`[DEBUG] No file notice needed.`);
+                        }
+                        
+                        let actualFinalPayloadContent = initialMessageContent + actualFileNoticeString;
+                        if (actualFinalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
+                            const truncationNotice = `\n*(Message was truncated...)*`;
+                            actualFinalPayloadContent = actualFinalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
+                        }
+                        const actualFinalContentSize = Buffer.byteLength(actualFinalPayloadContent, 'utf8');
+                        console.error(`[DEBUG] Final Content Size (after file notice & possible truncation): ${actualFinalContentSize} bytes`);
+
+                        const finalPayloadForLog = {
+                            content: actualFinalPayloadContent,
+                            files: safeFiles,
+                            embeds: basePayloadForSizeCalc.embeds, 
+                            username: username,
+                            avatarURL: avatarURL,
+                            allowedMentions: basePayloadForSizeCalc.allowedMentions,
+                            sticker_ids: stickerId ? [stickerId] : undefined
+                        };
+
+                        const actualFinalJsonSize = Buffer.byteLength(JSON.stringify(finalPayloadForLog));
+                        console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${actualFinalJsonSize} bytes`);
+                        
+                        const actualTotalEstimatedDataSize = actualFinalJsonSize + currentFileSize; 
+                        console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${actualTotalEstimatedDataSize} bytes`);
+                        console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
+                        console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
+                        
+                        const finalContentTrimmedForLog = finalPayloadForLog.content?.trim() || "";
+                        const isContentEmptyForLog = !finalContentTrimmedForLog;
+                        const areFilesEmptyForLog = !finalPayloadForLog.files || finalPayloadForLog.files.length === 0;
+                        const areEmbedsEmptyForLog = !finalPayloadForLog.embeds || finalPayloadForLog.embeds.length === 0;
+                        const haveStickerIdsForLog = finalPayloadForLog.sticker_ids && finalPayloadForLog.sticker_ids.length > 0;
+
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.content.trim(): "${finalContentTrimmedForLog}" (isEmpty: ${isContentEmptyForLog})`);
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.files.length: ${finalPayloadForLog.files?.length}`);
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.embeds.length: ${finalPayloadForLog.embeds?.length}`);
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.sticker_ids present: ${haveStickerIdsForLog}`);
+                        console.error(`--- PAYLOAD DEBUG END ---`);
+                    };
+
+                    // --- Process attachments and determine safeFiles/largeFiles ---
+                    for (const att of sortedAttachments) {
+                        // The core file selection check against MAX_PAYLOAD_SIZE
                         if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
                             safeFiles.push(att.url);
                             currentFileSize += att.size;
                         } else {
                             largeFiles.push({ name: att.name, size: att.size });
                         }
-                    });
-                    //console.error(`[DEBUG] Files selected for upload (${safeFiles.length}):`);
-                    safeFiles.forEach(url => console.error(`  - ${url.substring(url.lastIndexOf('/') + 1)}`));
-                    //console.error(`[DEBUG] Files skipped due to size (${largeFiles.length}):`);
-                    largeFiles.forEach(f => console.error(`  - ${f.name} (Size: ${f.size} bytes)`));
-                    //console.error(`[DEBUG] Total size of selected files: ${currentFileSize} bytes`);
-
-                    let fileNoticeString = "";
-                    if (largeFiles.length > 0) {
-                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})*`;
-                        //console.error(`[DEBUG] File Notice String Length: ${fileNoticeString.length} chars | Size: ${Buffer.byteLength(fileNoticeString, 'utf8')} bytes`);
-                    } else {
-                        //console.error(`[DEBUG] No file notice needed.`);
                     }
+                    
+                    // Prepare the final content string by adding the file notice if any files were skipped.
+                    let finalPayloadContent = initialMessageContent;
+                    let fileNoticeStringForPayload = ""; // This specific string is only for the payload's content
+                    if (largeFiles.length > 0) {
+                        fileNoticeStringForPayload = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})`;
+                    }
+                    finalPayloadContent += fileNoticeStringForPayload;
 
-                    let finalPayloadContent = initialMessageContent + fileNoticeString;
-
-                    // Truncate final content if it exceeds Discord's message limit *after* adding fileNotice
+                    // Truncate the final content if it exceeds Discord's message limit AFTER adding the file notice.
                     if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
                         const truncationNotice = `\n*(Message was truncated...)*`;
-                        // We need to be careful not to double-truncate if initialMessageContent was already truncated.
-                        // The safest approach is to rebuild from the original message content if possible,
-                        // or ensure we truncate the correct part. For simplicity here, we truncate the potentially
-                        // combined content. A more robust solution might involve complex truncation logic.
-                        // For now, assume initialMessageContent is already handled for DISCORD_MESSAGE_LIMIT if needed.
-                        // So we truncate finalPayloadContent directly.
                         finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
-                        //console.error(`[DEBUG] Final content truncated due to DISCORD_MESSAGE_LIMIT. New Length: ${finalPayloadContent.length}`);
                     }
                     
-                    const finalContentSize = Buffer.byteLength(finalPayloadContent, 'utf8');
-                    //console.error(`[DEBUG] Final Content Size (after file notice & possible truncation): ${finalContentSize} bytes`);
-
-                    // Construct the base for the FINAL JSON payload calculation
-                    const finalPayloadForJsonSize = {
+                    // --- Construct the final payload object used for checking and sending ---
+                    const finalPayload = {
                         content: finalPayloadContent,
+                        files: safeFiles,
+                        embeds: basePayloadForSizeCalc.embeds, 
                         username: username,
                         avatarURL: avatarURL,
-                        embeds: [], // Rebuilding to be precise about what's sent
-                        allowedMentions: { parse: ['roles'], repliedUser: false }
+                        allowedMentions: basePayloadForSizeCalc.allowedMentions,
+                        sticker_ids: stickerId ? [stickerId] : undefined
                     };
-                    if (replyEmbed) finalPayloadForJsonSize.embeds.push(replyEmbed);
-                    finalPayloadForJsonSize.embeds.push(...message.embeds);
-                    if (stickerId) finalPayloadForJsonSize.sticker_ids = [stickerId];
-
-                    const finalJsonSize = Buffer.byteLength(JSON.stringify(finalPayloadForJsonSize));
-                    //console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
                     
-                    const totalEstimatedDataSize = finalJsonSize + currentFileSize;
-                    //console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
-                    //console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
-                    //console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
-                    //console.error(`--- PAYLOAD DEBUG END ---`);
+                    // --- Evaluate the condition and set the flag if it triggers ---
+                    const logFinalContentTrimmed = finalPayload.content?.trim() || "";
+                    const isContentEmpty = !logFinalContentTrimmed;
+                    const areFilesEmpty = !finalPayload.files || finalPayload.files.length === 0;
+                    const areEmbedsEmpty = !finalPayload.embeds || finalPayload.embeds.length === 0;
+                    const haveStickerIds = finalPayload.sticker_ids && finalPayload.sticker_ids.length > 0;
 
-                    const finalPayload = { ...finalPayloadForJsonSize, files: safeFiles };
-                    
-                    if (!finalPayload.content.trim() && finalPayload.files.length === 0 && finalPayload.embeds.length === 0 && !finalPayload.stickers) {
-                        console.log(`[DEBUG] Payload is empty after processing. Skipping send.`);
-                        continue; // Skip if there's nothing to send
+                    if (isContentEmpty && areFilesEmpty && areEmbedsEmpty && !haveStickerIds) {
+                         shouldLogVerbose = true; // Trigger verbose logging if payload is determined to be empty
+                         console.log(`[DEBUG] Payload determined to be empty. Skipping send.`);
                     }
                     
+                    // --- Conditional Verbose Logging Execution ---
+                    // This block executes ONLY IF shouldLogVerbose is true.
+                    if (shouldLogVerbose) {
+                        // Call the helper to print all detailed logs using context from THIS iteration.
+                        logVerbosePayloadInfo(
+                            message.id, targetChannelName, initialMessageContent, message.attachments, message.embeds, message.stickers,
+                            initialJsonSize, currentFileSize, safeFiles, largeFiles, fileNoticeStringForPayload, finalPayloadContent,
+                            finalContentSize, Buffer.byteLength(JSON.stringify({ ...finalPayload, content: finalPayloadContent })), currentFileSize, // Pass finalPayloadForLog elements directly or reconstruct
+                            MAX_PAYLOAD_SIZE, targetChannelName, username, avatarURL, basePayloadForSizeCalc.allowedMentions, stickerId
+                        );
+                        // The `logVerbosePayloadInfo` helper would need all these context variables.
+                        // For clarity in this direct paste, I'll repeat the core logging logic here
+                        // to avoid passing too many arguments or issues with scoping for `message`.
+
+                        console.error(`--- PAYLOAD DEBUG START (Message ID: ${message.id}, Triggered by Skip/Error) ---`);
+                        console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
+                        console.error(`[DEBUG] Initial JSON Size (before file notice, includes embeds, metadata): ${initialJsonSize} bytes`);
+                        console.error(`[DEBUG] Files selected for upload (${safeFiles.length}):`);
+                        safeFiles.forEach(url => console.error(`  - ${url.substring(url.lastIndexOf('/') + 1)}`));
+                        console.error(`[DEBUG] Files skipped due to size (${largeFiles.length}):`);
+                        largeFiles.forEach(f => console.error(`  - ${f.name} (Size: ${f.size} bytes)`));
+                        console.error(`[DEBUG] Total size of selected files: ${currentFileSize} bytes`);
+
+                        console.error(`[DEBUG] File Notice String Size: ${Buffer.byteLength(fileNoticeStringForPayload, 'utf8')} bytes`);
+                        
+                        const finalContentSize_log = Buffer.byteLength(finalPayloadContent, 'utf8');
+                        console.error(`[DEBUG] Final Content Size (after file notice & possible truncation): ${finalContentSize_log} bytes`);
+
+                        const finalPayloadForLog = {
+                            content: finalPayloadContent,
+                            files: safeFiles,
+                            embeds: basePayloadForSizeCalc.embeds, 
+                            username: username,
+                            avatarURL: avatarURL,
+                            allowedMentions: basePayloadForSizeCalc.allowedMentions,
+                            sticker_ids: stickerId ? [stickerId] : undefined
+                        };
+
+                        const actualFinalJsonSize = Buffer.byteLength(JSON.stringify(finalPayloadForLog));
+                        console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${actualFinalJsonSize} bytes`);
+                        
+                        const actualTotalEstimatedDataSize = actualFinalJsonSize + currentFileSize; 
+                        console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
+                        console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
+                        console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
+                        
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.content.trim(): "${finalPayload.content?.trim()}" (isEmpty: ${isContentEmpty})`);
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.files.length: ${finalPayload.files?.length}`);
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.embeds.length: ${finalPayload.embeds?.length}`);
+                        console.error(`[EXACT_CHECK_STATE] finalPayload.sticker_ids present: ${haveStickerIds}`);
+                        console.error(`--- PAYLOAD DEBUG END ---`);
+                    }
+
+                    // --- Attempt to send the payload ---
                     let relayedMessage = null;
                     const webhookClient = new WebhookClient({ url: target.webhook_url });
+                    
                     try {
-                        relayedMessage = await webhookClient.send(finalPayload);
+                         relayedMessage = await webhookClient.send(finalPayload);
                     } catch (sendError) {
-                        if (sendError.code === 50006 && finalPayload.stickers) {
+                        if (sendError.code === 40005) { // Request entity too large
+                            shouldLogVerbose = true; // Flag for verbose logging due to this specific error
+                            console.error(`[ERROR 40005] Caught Request entity too large for message ${message.id} to #${targetChannelName}. Re-throwing to ensure verbose logs are triggered.`);
+                            throw sendError; // Re-throw to be caught by the outer catch, ensuring verbose logs if needed
+                        } else if (sendError.code === 50006 && finalPayload.sticker_ids) { // Sticker fallback
                             console.log(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
                             try {
-                                const sticker = message.stickers.first();
+                                // Access sticker info from the original message context
+                                const sticker = message.stickers.first(); 
                                 if (sticker && sticker.name) {
                                     const fallbackPayload = { ...finalPayload };
-                                    delete fallbackPayload.stickers;
+                                    delete fallbackPayload.sticker_ids; // Remove sticker_ids from payload
+                                    // Append sticker name to content and re-truncate if necessary
                                     fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
+                                    if (fallbackPayload.content.length > DISCORD_MESSAGE_LIMIT) {
+                                        const truncationNotice = `\n*(Message was truncated...)*`;
+                                        fallbackPayload.content = fallbackPayload.content.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
+                                    }
                                     relayedMessage = await webhookClient.send(fallbackPayload);
                                 }
                             } catch (fallbackError) {
                                 console.error(`[RELAY] FAILED on fallback attempt for message ${message.id}:`, fallbackError);
+                                if (fallbackError.code === 40005) { // If fallback also fails with 40005
+                                    shouldLogVerbose = true; 
+                                    console.error(`[ERROR 40005 AFTER FALLBACK] Caught Request entity too large for message ${message.id} to #${targetChannelName} after fallback. Re-throwing.`);
+                                    throw fallbackError;
+                                }
                             }
                         } else {
-                            throw sendError;
+                            throw sendError; // Re-throw other errors
                         }
                     }
-
-                    //if (largeFiles.length > 0) {
-                    //    const fileNotice = `*(Note: ${largeFiles.length} file(s) from the message above were too large or exceeded the total upload limit and were not relayed: ${largeFiles.join(', ')})*`;
-                    //    await webhookClient.send({
-                    //        content: fileNotice,
-                    //        username: username,
-                    //        avatarURL: avatarURL
-                    //    });
-                    //}
+                    
+                    // --- Database insertion and any subsequent actions ---
+                    // No separate `webhookClient.send` for large files needed here anymore.
 
                     if (relayedMessage) {
                         db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
                           .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
                     }
                 } catch (error) {
-                    console.error(`[ERROR] Code:`, error.code);
-                    const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
-                    if (error.code === 10015) {
-                        console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelName} is invalid. Removing from relay.`);
+                    // Catch any error from the try block associated with this target channel processing
+                    if (error.code === 40005) { 
+                        // If a 40005 error occurs and wasn't re-thrown and caught higher up to set the flag
+                        shouldLogVerbose = true; 
+                    } 
+                    
+                    const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
+                    if (error.code === 10015) { // Invalid Webhook
+                        console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelNameForError} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
-                    } else if (sendError.code === 40005) {
-					console.error(`[DEBUG] Final JSON payload size (with final content, embeds, sticker_ids): ${finalJsonSize} bytes`);
-                    console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE (Final JSON + Safe File Data): ${totalEstimatedDataSize} bytes`);
-                    console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
-                    console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE used for file selection: ${MAX_PAYLOAD_SIZE} bytes`);
                     } else {
-                        console.error(`[RELAY-LOOP-ERROR] FAILED to process relay for target #${targetChannelName}.`, error);
+                        console.error(`[RELAY-LOOP-ERROR] FAILED to process relay for target #${targetChannelNameForError}.`, error);
                     }
                 }
             }
         } catch (error) {
+            // This catches fatal errors not specific to a target channel's send attempt
+            if (error.code === 40005) { // If a fatal 40005 occurred
+                 shouldLogVerbose = true; 
+            }
             console.error(`[ERROR] Code:`, error.code);
             console.error(`[FATAL-ERROR] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
+        } finally {
+            // The `shouldLogVerbose` flag is set throughout the try/catch blocks.
+            // If it's true, it means verbose logging *was* triggered and printed already
+            // by the specific logic inside those blocks (either "payload empty" or "40005 error").
+            // So, we don't need to re-trigger the whole log here if the flag is just a status keeper.
+            // If the logging was structured as a function call *at the end*, then we would call it here if shouldLogVerbose.
+            // However, for direct code placement, the logs are already placed correctly where shouldLogVerbose is set.
+            // So no additional action is strictly necessary here unless a final, centralized logging call was planned.
         }
     },
 };

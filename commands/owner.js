@@ -22,22 +22,26 @@ module.exports = {
                 .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
-                .setName('prune_db')
-                .setDescription('Removes orphaned data and optionally prunes old message history.')
+.setName('prune_db')
+                .setDescription('Removes orphaned data and optionally prunes old message history or groups.')
                 .addBooleanOption(option =>
                     option.setName('include_inactive')
                         .setDescription('Also prune groups with zero total character usage and orphaned webhooks? (Default: False)'))
                 .addIntegerOption(option =>
-                    option.setName('days') // This remains for pruning GROUPS based on inactivity
+                    option.setName('days') // For pruning GROUPS based on inactivity days
                         .setDescription('Also prune groups inactive for this many days.'))
-                // NEW OPTION FOR PRUNING MESSAGE HISTORY
                 .addIntegerOption(option =>
                     option.setName('message_history_days')
-                        .setDescription('Prune relayed messages older than this many days (e.g., 30). Separate from group inactivity.')))
+                        .setDescription('Prune relayed messages older than this many days (e.g., 30).'))
+                // NEW OPTION TO CONTROL group_stats pruning
+                .addBooleanOption(option =>
+                    option.setName('prune_stats')
+                        .setDescription('When pruning message history, also prune group_stats older than message_history_days? (Default: False)')))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('upload_db')
-                .setDescription('Uploads the database to your secure web server endpoint.')),
+                .setDescription('Uploads the database to your secure web server endpoint.'))
+        , // Added comma here for clarity in case of future subcommands
 
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
@@ -328,6 +332,181 @@ module.exports = {
                     // Optionally list the orphaned server IDs if the list is manageable
                     const guildIdsString = prunedGuilds.join('\n');
                     // Limit length if necessary, e.g., 1024 characters for embed field value
+                    const displayGuildIds = guildIdsString.length > 1000 ? guildIdsString.substring(0, 1000) + '\n...' : guildIdsString;
+                    resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${displayGuildIds}\`\`\``, inline: false });
+                }
+                
+                await interaction.editReply({ embeds: [resultsEmbed] });
+                console.log(`[Manual Prune] Summary Report: ${prunedGroups} groups, ${prunedLinks} links, ${prunedMappings} mappings, ${prunedWebhooks} webhooks, ${prunedMessages} messages.`);
+
+            } else if (subcommand === 'prune_db') {
+                await interaction.deferReply({ ephemeral: true });
+                const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
+                const inactiveGroupDays = interaction.options.getInteger('days'); // For pruning GROUPS based on inactivity days
+                const messageHistoryDays = interaction.options.getInteger('message_history_days'); // For pruning message history
+                const pruneStats = interaction.options.getBoolean('prune_stats') ?? false; // NEW: Control for group_stats pruning
+
+                let prunedGroups = 0, prunedLinks = 0, prunedMappings = 0, prunedWebhooks = 0;
+                let prunedMessages = 0, prunedStats = 0; // Count for group_stats if pruned
+                const prunedGuilds = [];
+                const groupIdsToDelete = new Set();
+
+                // --- 1. Prune Data from Orphaned Servers ---
+                const currentGuildIds = new Set(interaction.client.guilds.cache.keys());
+                const groupOwners = db.prepare('SELECT DISTINCT owner_guild_id FROM relay_groups').all().map(r => r.owner_guild_id);
+                const linkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all().map(r => r.guild_id);
+                const mappedGuilds = db.prepare('SELECT DISTINCT guild_id FROM role_mappings').all().map(r => r.guild_id);
+                const uniqueDbGuildIds = [...new Set([...groupOwners, ...linkedGuilds, ...mappedGuilds])];
+                const guildsToPrune = uniqueDbGuildIds.filter(id => id && !currentGuildIds.has(id));
+
+                if (guildsToPrune.length > 0) {
+                    console.log(`[Manual Prune] Found ${guildsToPrune.length} orphaned guild(s) to clean up.`);
+                    for (const guildId of guildsToPrune) {
+                        const groups = db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
+                        const links = db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
+                        const mappings = db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
+                        prunedGroups += groups.changes;
+                        prunedLinks += links.changes;
+                        prunedMappings += mappings.changes;
+                        prunedGuilds.push(guildId);
+                    }
+                    console.log(`[Manual Prune] Cleaned up orphaned server data.`);
+                }
+
+                // --- 2. Prune Inactive Groups (if requested by 'include_inactive') ---
+                if (includeInactive) {
+                    console.log(`[Manual Prune] Identifying groups with zero total character usage.`);
+                    const groupsWithZeroUsage = db.prepare(`
+                        SELECT rg.group_id 
+                        FROM relay_groups rg 
+                        LEFT JOIN (
+                            SELECT group_id, SUM(character_count) as total_chars 
+                            FROM group_stats 
+                            GROUP BY group_id
+                        ) gs ON rg.group_id = gs.group_id 
+                        WHERE gs.total_chars IS NULL OR gs.total_chars = 0
+                    `).all();
+                    
+                    groupsWithZeroUsage.forEach(g => groupIdsToDelete.add(g.group_id));
+                    console.log(`[Manual Prune] Found ${groupsWithZeroUsage.length} groups with zero usage to be deleted.`);
+                }
+
+                // --- 3. Prune Stale Groups (if requested by 'days' option) ---
+                if (inactiveGroupDays !== null && inactiveGroupDays > 0) {
+                    console.log(`[Manual Prune] Identifying groups inactive for more than ${inactiveGroupDays} days.`);
+                    const cutoffDateForGroups = new Date();
+                    cutoffDateForGroups.setDate(cutoffDateForGroups.getDate() - inactiveGroupDays);
+                    const cutoffDateStringForGroups = cutoffDateForGroups.toISOString().slice(0, 10);
+
+                    const staleGroups = db.prepare(`
+                        SELECT DISTINCT group_id FROM relay_groups 
+                        WHERE group_id NOT IN (
+                            SELECT DISTINCT group_id FROM group_stats WHERE day >= ?
+                        )
+                    `).all(cutoffDateStringForGroups);
+                    
+                    staleGroups.forEach(g => groupIdsToDelete.add(g.group_id));
+                    console.log(`[Manual Prune] Found ${staleGroups.length} stale groups (based on days) to be deleted.`);
+                }
+
+                // Delete all collected inactive/stale groups from relay_groups
+                if (groupIdsToDelete.size > 0) {
+                    const ids = Array.from(groupIdsToDelete);
+                    const placeholders = ids.map(() => '?').join(',');
+                    const stmt = db.prepare(`DELETE FROM relay_groups WHERE group_id IN (${placeholders})`);
+                    const result = stmt.run(...ids);
+                    prunedGroups += result.changes;
+                    console.log(`[Manual Prune] Deleted ${result.changes} groups based on inactivity/zero usage.`);
+                }
+
+                // --- 4. Prune Orphaned Webhooks ---
+                if (includeInactive) {
+                    console.log(`[Manual Prune] Scanning for orphaned webhooks.`);
+                    const allDbWebhooks = new Set(db.prepare('SELECT webhook_url FROM linked_channels').all().map(r => r.webhook_url));
+                    let webhooksScannedInGuilds = 0;
+                    for (const guild of interaction.client.guilds.cache.values()) {
+                        try {
+                            if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageWebhooks)) continue;
+                            const webhooks = await guild.fetchWebhooks();
+                            for (const webhook of webhooks.values()) {
+                                if (webhook.owner.id === interaction.client.user.id && !allDbWebhooks.has(webhook.url)) {
+                                    console.log(`[Manual Prune] Deleting orphaned webhook on guild ${guild.name} (${guild.id}). Hook: ${webhook.url}`);
+                                    await webhook.delete('Pruning orphaned RelayBot webhook.');
+                                    prunedWebhooks++;
+                                }
+                            }
+                            webhooksScannedInGuilds++;
+                        } catch (error) {
+                            console.error(`[Manual Prune] Error fetching/deleting webhooks for guild ${guild.id}: ${error.message}`);
+                        }
+                    }
+                    console.log(`[Manual Prune] Scanned ${webhooksScannedInGuilds} guilds for orphaned webhooks.`);
+                }
+                
+                // --- SECTION: Prune Old Message Links AND Group Stats (if requested) ---
+                if (messageHistoryDays !== null && messageHistoryDays > 0) {
+                    console.log(`[Manual Prune] Starting message history pruning for data older than ${messageHistoryDays} days.`);
+
+                    // Calculate cutoff values using BigInt for snowflakes and date strings
+                    const cutoffDate = new Date();
+                    cutoffDate.setDate(cutoffDate.getDate() - messageHistoryDays); // Prune data older than 'messageHistoryDays'
+
+                    // For group_stats pruning: Calculate cutoff day string
+                    const cutoffDayString = cutoffDate.toISOString().slice(0, 10);
+
+                    // For relayed_messages pruning: Calculate cutoff Snowflake ID using BigInt
+                    const discordEpoch = 1420070400000n; 
+                    const cutoffTimestamp = BigInt(cutoffDate.getTime()); 
+                    const discordEpochCutoffBigInt = (cutoffTimestamp - discordEpoch) << 22n; 
+                    const cutoffIdString = discordEpochCutoffBigInt.toString();
+
+                    // Prune relayed_messages
+                    console.log(`[Manual Prune] Pruning relayed_messages with original_message_id < ${cutoffIdString}`);
+                    const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
+                    prunedMessages = resultMessages.changes;
+                    console.log(`[Manual Prune] Deleted ${prunedMessages} relayed messages.`);
+                    
+                    // Conditionally prune group_stats
+                    if (pruneStats) {
+                        console.log(`[Manual Prune] Pruning group_stats with day < ${cutoffDayString}`);
+                        const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
+                        prunedStats = resultStats.changes;
+                        console.log(`[Manual Prune] Deleted ${prunedStats} group stats entries.`);
+                    } else {
+                        console.log(`[Manual Prune] SKIPPING group_stats pruning as 'prune_stats' was not enabled.`);
+                    }
+                }
+
+                // --- Build the final report embed ---
+                const resultsEmbed = new EmbedBuilder()
+                    .setTitle('Database & Pruning Operations Complete')
+                    .setColor('#5865F2') // Discord's blurple color
+                    .setDescription(`Pruning tasks finished. Check bot logs for full details.`)
+                    .addFields(
+                        { name: 'Orphaned Server Data', value: `Cleaned up data for **${prunedGuilds.length}** orphaned server(s).`, inline: true },
+                        { name: '\u200B', value: '\u200B', inline: true }, // Placeholder for spacing
+                        { name: '\u200B', value: '\u200B', inline: true },
+                        { name: 'Groups Deleted (Total)', value: `${prunedGroups}`, inline: true },
+                        { name: 'Channel Links Deleted', value: `${prunedLinks}`, inline: true },
+                        { name: 'Role Mappings Deleted', value: `${prunedMappings}`, inline: true },
+                        { name: 'Orphaned Webhooks Pruned', value: `${prunedWebhooks}`, inline: true }
+                    );
+
+                // Add message history and stats pruning results only if the option was used
+                if (messageHistoryDays !== null && messageHistoryDays > 0) {
+                    let statsPruningStatus = `(Group stats were intentionally left intact)`;
+                    if (pruneStats) {
+                         statsPruningStatus = `Pruned **${prunedStats}** group stats entries.`;
+                    }
+                    resultsEmbed.addFields({
+                        name: `Relayed Messages History (Older than ${messageHistoryDays} days)`,
+                        value: `Pruned **${prunedMessages}** message links. ${statsPruningStatus}`,
+                        inline: false // Full width for this field
+                    });
+                }
+                
+                if (prunedGuilds.length > 0) {
+                    const guildIdsString = prunedGuilds.join('\n');
                     const displayGuildIds = guildIdsString.length > 1000 ? guildIdsString.substring(0, 1000) + '\n...' : guildIdsString;
                     resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${displayGuildIds}\`\`\``, inline: false });
                 }
