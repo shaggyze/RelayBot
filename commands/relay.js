@@ -1,5 +1,5 @@
 // commands/relay.js
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
 const db = require('../db/database.js');
 const { isSupporter } = require('../utils/supporterManager.js');
 
