@@ -306,7 +306,7 @@ module.exports = {
                         logVerbosePayloadInfo(
                             message.id, targetChannelName, initialMessageContent, message.attachments, message.embeds, message.stickers,
                             initialJsonSize, currentFileSize, safeFiles, largeFiles, fileNoticeStringForPayload, finalPayloadContent,
-                            finalContentSize, Buffer.byteLength(JSON.stringify({ ...finalPayload, content: finalPayloadContent })), currentFileSize, // Pass finalPayloadForLog elements directly or reconstruct
+                            actualFinalContentSize, Buffer.byteLength(JSON.stringify({ ...finalPayload, content: finalPayloadContent })), currentFileSize, // Pass finalPayloadForLog elements directly or reconstruct
                             MAX_PAYLOAD_SIZE, targetChannelName, username, avatarURL, basePayloadForSizeCalc.allowedMentions, stickerId
                         );
                         // The `logVerbosePayloadInfo` helper would need all these context variables.
