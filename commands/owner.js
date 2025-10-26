@@ -22,7 +22,7 @@ module.exports = {
                 .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
-.setName('prune_db')
+				.setName('prune_db')
                 .setDescription('Removes orphaned data and optionally prunes old message history or groups.')
                 .addBooleanOption(option =>
                     option.setName('include_inactive')
@@ -38,11 +38,14 @@ module.exports = {
                     option.setName('prune_stats')
                         .setDescription('Also prune group_stats older than message_history_days? (Default: False)') // Shortened description
                 ))
+                .addIntegerOption(option =>
+                    option.setName('batch_size')
+                        .setDescription('Number of messages to delete per batch (e.g., 10000). Use if disk is full.')))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('upload_db')
-                .setDescription('Uploads the database to your secure web server endpoint.')),
-
+                .setDescription('Uploads the database to your secure web server endpoint.'))
+	,
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
             return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
@@ -166,12 +169,14 @@ module.exports = {
             } else if (subcommand === 'prune_db') {
                 await interaction.deferReply({ ephemeral: true });
                 const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
-                const inactiveGroupDays = interaction.options.getInteger('days'); // For pruning GROUPS based on inactivity days
-                const messageHistoryDays = interaction.options.getInteger('message_history_days'); // For pruning message history
-                const pruneStats = interaction.options.getBoolean('prune_stats') ?? false; // NEW: Control for group_stats pruning
+                const inactiveGroupDays = interaction.options.getInteger('days');
+                const messageHistoryDays = interaction.options.getInteger('message_history_days');
+                const pruneStats = interaction.options.getBoolean('prune_stats') ?? false;
+                // [THE FIX] Get the batch size, with a default value.
+                const batchSize = interaction.options.getInteger('batch_size') ?? 10000; // Default to 10,000 if not provided
 
                 let prunedGroups = 0, prunedLinks = 0, prunedMappings = 0, prunedWebhooks = 0;
-                let prunedMessages = 0, prunedStats = 0; // Count for group_stats if pruned
+                let totalPrunedMessages = 0, prunedStats = 0;
                 const prunedGuilds = [];
                 const groupIdsToDelete = new Set();
 
@@ -269,35 +274,39 @@ module.exports = {
                 
                 // --- SECTION: Prune Old Message Links AND Group Stats (if requested) ---
                 if (messageHistoryDays !== null && messageHistoryDays > 0) {
-                    console.log(`[Manual Prune] Starting message history pruning for data older than ${messageHistoryDays} days.`);
+                    await interaction.editReply({ content: `Pruning message history older than ${messageHistoryDays} days in batches of ${batchSize}. This may take a while...` });
 
-                    // Calculate cutoff values using BigInt for snowflakes and date strings
                     const cutoffDate = new Date();
-                    cutoffDate.setDate(cutoffDate.getDate() - messageHistoryDays); // Prune data older than 'messageHistoryDays'
+                    cutoffDate.setDate(cutoffDate.getDate() - messageHistoryDays);
 
-                    // For group_stats pruning: Calculate cutoff day string
-                    const cutoffDayString = cutoffDate.toISOString().slice(0, 10);
-
-                    // For relayed_messages pruning: Calculate cutoff Snowflake ID using BigInt
+                    // --- [THE FIX] Relayed Messages Pruning (in batches) ---
                     const discordEpoch = 1420070400000n; 
                     const cutoffTimestamp = BigInt(cutoffDate.getTime()); 
                     const discordEpochCutoffBigInt = (cutoffTimestamp - discordEpoch) << 22n; 
                     const cutoffIdString = discordEpochCutoffBigInt.toString();
 
-                    // Prune relayed_messages
-                    console.log(`[Manual Prune] Pruning relayed_messages with original_message_id < ${cutoffIdString}`);
-                    const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
-                    prunedMessages = resultMessages.changes;
-                    console.log(`[Manual Prune] Deleted ${prunedMessages} relayed messages.`);
+                    let prunedInBatch = 0;
+                    console.log(`[Manual Prune] Starting batched pruning of relayed_messages older than ${cutoffIdString} in batches of ${batchSize}.`);
+
+                    // Prepare the statement once for efficiency. This is a safe way to delete with a limit.
+                    const stmt = db.prepare(`DELETE FROM relayed_messages WHERE id IN (SELECT id FROM relayed_messages WHERE original_message_id < ? LIMIT ?)`);
                     
-                    // Conditionally prune group_stats
+                    do {
+                        const result = stmt.run(cutoffIdString, batchSize);
+                        prunedInBatch = result.changes;
+                        totalPrunedMessages += prunedInBatch;
+                        console.log(`[Manual Prune] Deleted ${prunedInBatch} messages in this batch. Total so far: ${totalPrunedMessages}`);
+                    } while (prunedInBatch > 0);
+
+                    console.log(`[Manual Prune] Finished batched pruning. Deleted a total of ${totalPrunedMessages} relayed messages.`);
+
+                    // --- Group Stats Pruning (if requested) ---
                     if (pruneStats) {
+                        const cutoffDayString = cutoffDate.toISOString().slice(0, 10);
                         console.log(`[Manual Prune] Pruning group_stats with day < ${cutoffDayString}`);
                         const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
                         prunedStats = resultStats.changes;
                         console.log(`[Manual Prune] Deleted ${prunedStats} group stats entries.`);
-                    } else {
-                        console.log(`[Manual Prune] SKIPPING group_stats pruning as 'prune_stats' was not enabled.`);
                     }
                 }
 
