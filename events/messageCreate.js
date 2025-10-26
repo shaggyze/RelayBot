@@ -1,6 +1,7 @@
 // events/messageCreate.js
 const { Events, WebhookClient, Collection, PermissionFlagsBits, EmbedBuilder, blockQuote, quote } = require('discord.js');
 const db = require('../db/database.js');
+const crypto = require('crypto');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { isSupporter, getSupporterSet } = require('../utils/supporterManager.js');
 const { getRateLimitDayString, RESET_HOUR_UTC } = require('../utils/time.js');
@@ -29,6 +30,7 @@ async function checkGroupForSupporters(client, groupId) {
 module.exports = {
     name: Events.MessageCreate,
     async execute(message) {
+		const executionId = crypto.randomBytes(4).toString('hex');
         let shouldLogVerbose = false; // Flag to control extensive logging for problematic payloads
 
         try {
@@ -81,14 +83,14 @@ module.exports = {
                 }
                 return;
             }
-            console.log(`[EVENT] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
+            console.log(`[EVENT][${executionId}] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
             if (targetChannels.length === 0) {
-                console.log(`[DEBUG] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
+                console.log(`[DEBUG][${executionId}] No valid receiving channels found. Nothing to relay.`);
                 return;
-            }
+			}
 
-            console.log(`[DEBUG] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+            console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
         
             const senderName = message.member?.displayName ?? message.author.username;
             let username = `${senderName} (${message.guild.name})`;
@@ -101,7 +103,7 @@ module.exports = {
             for (const target of targetChannels) {
                 try {
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                    console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
+                    console.log(`[RELAY][${executionId}] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
                     
                     let replyEmbed = null;
                     if (message.reference && message.reference.messageId) {
@@ -296,7 +298,7 @@ module.exports = {
 
                     if (isContentEmpty && areFilesEmpty && areEmbedsEmpty && !haveStickerIds) {
                          shouldLogVerbose = true; // Trigger verbose logging if payload is determined to be empty
-                         console.log(`[DEBUG] Payload determined to be empty. Skipping send.`);
+                         console.log(`[DEBUG][${executionId}] Payload determined to be empty. Skipping send.`);
                     }
                     
                     // --- Conditional Verbose Logging Execution ---
@@ -407,11 +409,11 @@ module.exports = {
                     } 
                     
                     const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
-                    if (error.code === 10015) { // Invalid Webhook
-                        console.error(`[AUTO-CLEANUP] Webhook for channel #${targetChannelNameForError} is invalid. Removing from relay.`);
+                    if (error.code === 10015) {
+                        console.error(`[AUTO-CLEANUP][${executionId}] Webhook for channel #${targetChannelNameForError} is invalid. Removing from relay.`);
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
-                        console.error(`[RELAY-LOOP-ERROR] FAILED to process relay for target #${targetChannelNameForError}.`, error);
+                        console.error(`[RELAY-LOOP-ERROR][${executionId}] FAILED to process relay for target #${targetChannelNameForError}.`, error);
                     }
                 }
             }
@@ -421,15 +423,6 @@ module.exports = {
                  shouldLogVerbose = true; 
             }
             console.error(`[ERROR] Code:`, error.code);
-            console.error(`[FATAL-ERROR] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
-        } finally {
-            // The `shouldLogVerbose` flag is set throughout the try/catch blocks.
-            // If it's true, it means verbose logging *was* triggered and printed already
-            // by the specific logic inside those blocks (either "payload empty" or "40005 error").
-            // So, we don't need to re-trigger the whole log here if the flag is just a status keeper.
-            // If the logging was structured as a function call *at the end*, then we would call it here if shouldLogVerbose.
-            // However, for direct code placement, the logs are already placed correctly where shouldLogVerbose is set.
-            // So no additional action is strictly necessary here unless a final, centralized logging call was planned.
-        }
+            console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
     },
 };
