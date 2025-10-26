@@ -107,7 +107,7 @@ module.exports = {
         for (const target of targetChannels) {
             try {
                 const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
+                console.log(`[RELAY][${executionId}] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
                 
                 let replyEmbed = null;
                 

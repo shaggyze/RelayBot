@@ -80,7 +80,8 @@ The bot uses **global groups**. One server creates the group, and others link to
 - `/relay unmap_role`: Removes a specific role mapping.
 
 **Settings:**
-- `/relay set_delete_delay`: Sets how long until relayed messages are auto-deleted (off by default).
+- `/relay set_direction`: Sets the direction of a channel from a group you own.
+- `/relay set_delete_delay`: Sets how long until relayed messages are auto-deleted (OFF by default).
 - `/relay toggle_forward_delete`: Toggles if deleting an original message also deletes its copies (ON by default).
 - `/relay toggle_reverse_delete`: Toggles if deleting a relayed copy also deletes the original message (OFF by default).
 

@@ -21,7 +21,8 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('set_delete_delay').setDescription('Sets the auto-delete delay for messages in this channel (0 to disable).').addIntegerOption(option => option.setName('hours').setDescription('How many hours before messages are deleted').setRequired(true).setMinValue(0).setMaxValue(720)))
         .addSubcommand(subcommand => subcommand.setName('toggle_forward_delete').setDescription('Toggle if deleting an original message also deletes its copies (ON by default).'))
         .addSubcommand(subcommand => subcommand.setName('toggle_reverse_delete').setDescription('Toggle if deleting a relayed copy also deletes the original message (OFF by default).')),
-
+        .addSubcommand(subcommand => subcommand.setName('set_direction').setDescription('Sets the direction of a channel from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the relay group.').setRequired(true)).addChannelOption(option => option.setName('channel').setDescription('The channel you want to modify.').addChannelTypes(ChannelType.GuildText).setRequired(true)).addStringOption(option => option.setName('direction').setDescription('The new relay direction for this channel.').setRequired(true).addChoices({ name: 'Both (Send & Receive)', value: 'BOTH' }, { name: 'Send Only', value: 'SEND_ONLY' }, { name: 'Receive Only', value: 'RECEIVE_ONLY' })))
+		
     async execute(interaction) {
         if (!interaction.inGuild()) {
             return await interaction.reply({ content: 'This command can only be used inside a server.', ephemeral: true });
@@ -33,7 +34,7 @@ module.exports = {
 
         try {
             if (subcommand === 'help') {
-                const helpEmbed = new EmbedBuilder().setTitle('How to Set Up the Relay Bot').setColor('#5865F2').setDescription('Follow these steps to connect channels across different servers using global groups.').addFields({ name: 'Step 1: Create a GLOBAL Group (On ONE Server Only)', value: 'One server must create the "global" group. The name must be unique across all servers using this bot.\n`Ex: /relay create_group name: my-super-unique-alliance`' }, { name: 'Step 2: Link Channels (On ALL Servers)', value: 'When linking, you can now specify a direction! "Send Only" is great for announcement channels, and "Receive Only" is great for log channels.\n`Ex: /relay link_channel group_name: my-super-unique-alliance direction: Both Ways`' }, { name: 'Step 3: Map Roles (Optional)', value: 'To sync role pings, map your server\'s roles to a common name within that group.\n`Ex: /relay map_role group_name: my-super-unique-alliance common_name: K30-31 role: @Kingdom-30-31`' }, { name: 'Step 4: Managing Your Setup', value: '• `/relay list_servers`: See all servers in a group.\n' + '• `/relay list_mappings`: See all role mappings for a group.\n' + '• `/relay kick_server`: Forcibly remove a server from a group you own.\n' + '• `/relay delete_group`: Deletes a global group (owner only).\n' + '• `/relay toggle_forward_delete`: Toggle if deleting an original message also deletes its copies.\n' + '• `/relay toggle_reverse_delete`: Toggle if deleting a relayed message deletes the original.\n' + '• `/relay unlink_channel`: Removes only this channel from a relay.\n' + '• `/relay unmap_role`: Removes a role mapping.\n' + '• `/relay set_delete_delay`: Sets message auto-delete delay.\n' + '• `/version`, `/invite` & `/vote` : Get bot info.' }).setFooter({ text: `RelayBot v${require('../package.json').version}` });
+                const helpEmbed = new EmbedBuilder().setTitle('How to Set Up the Relay Bot').setColor('#5865F2').setDescription('Follow these steps to connect channels across different servers using global groups.').addFields({ name: 'Step 1: Create a GLOBAL Group (On ONE Server Only)', value: 'One server must create the "global" group. The name must be unique across all servers using this bot.\n`Ex: /relay create_group name: my-super-unique-alliance`' }, { name: 'Step 2: Link Channels (On ALL Servers)', value: 'When linking, you can now specify a direction! "Send Only" is great for announcement channels, and "Receive Only" is great for log channels.\n`Ex: /relay link_channel group_name: my-super-unique-alliance direction: Both Ways`' }, { name: 'Step 3: Map Roles (Optional)', value: 'To sync role pings, map your server\'s roles to a common name within that group.\n`Ex: /relay map_role group_name: my-super-unique-alliance common_name: K30-31 role: @Kingdom-30-31`' }, { name: 'Step 4: Managing Your Setup', value: '• `/relay list_servers`: See all servers in a group.\n' + '• `/relay list_mappings`: See all role mappings for a group.\n' + '• `/relay kick_server`: Forcibly remove a server from a group you own.\n' + '• `/relay delete_group`: Deletes a global group (owner only).\n' + '• `/relay toggle_forward_delete`: Toggle if deleting an original message also deletes its copies.\n' + '• `/relay toggle_reverse_delete`: Toggle if deleting a relayed message deletes the original.\n' + '• `/relay unlink_channel`: Removes only this channel from a relay.\n' + '• `/relay unmap_role`: Removes a role mapping.\n' + '• `/relay set_direction`: Sets the direction of a channel.\n' + '• `/relay set_delete_delay`: Sets message auto-delete delay.\n' + '• `/version`, `/invite` & `/vote` : Get bot info.' }).setFooter({ text: `RelayBot v${require('../package.json').version}` });
                 await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
 
             } else if (subcommand === 'create_group') {
@@ -206,9 +207,52 @@ module.exports = {
                 db.prepare('UPDATE linked_channels SET allow_reverse_delete = ? WHERE channel_id = ?').run(newValue ? 1 : 0, channelId);
                 const status = newValue ? 'ENABLED' : 'DISABLED';
                 await interaction.reply({ content: `✅ Reverse deletion for this channel is now **${status}**.`, ephemeral: true });
-            }
 
-        } catch (error) {
+            } else if (subcommand === 'set_direction') {
+				await interaction.deferReply({ ephemeral: true });
+
+				const groupName = interaction.options.getString('group_name');
+				const targetChannel = interaction.options.getChannel('channel');
+				const newDirection = interaction.options.getString('direction');
+
+				try {
+					// 1. Find the group and verify ownership and permissions.
+					const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
+
+					if (!group) {
+						return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${groupName}".` });
+					}
+
+					if (interaction.guild.id !== group.owner_guild_id) {
+						return interaction.editReply({ content: `❌ **Permission Denied:** This command can only be run on the server that owns the "${groupName}" group.` });
+					}
+
+					if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+						return interaction.editReply({ content: '❌ **Permission Denied:** You must be an administrator to manage relay groups.' });
+					}
+
+					// 2. Verify that the channel is actually linked to this group.
+					const link = db.prepare('SELECT channel_id FROM linked_channels WHERE group_id = ? AND channel_id = ?').get(group.group_id, targetChannel.id);
+
+					if (!link) {
+						return interaction.editReply({ content: `❌ **Error:** The channel ${targetChannel} is not part of the "${groupName}" relay group.` });
+					}
+
+					// 3. Perform the update.
+					const result = db.prepare('UPDATE linked_channels SET direction = ? WHERE channel_id = ? AND group_id = ?').run(newDirection, targetChannel.id, group.group_id);
+
+					if (result.changes > 0) {
+						await interaction.editReply({ content: `✅ **Success!** The direction for ${targetChannel} in the **${groupName}** group has been set to \`${newDirection}\`.` });
+					} else {
+						await interaction.editReply({ content: '⚠️ **Warning:** The channel already had that direction set. No changes were made.' });
+					}
+				
+				} catch (error) {
+					console.error('Error in /relay set_direction:', error);
+					await interaction.editReply({ content: 'An unexpected error occurred while trying to set the channel direction. Please check the logs.' });
+				}
+			}
+		} catch (error) {
            console.error(`Error in /relay ${subcommand}:`, error);
            if (interaction.deferred) {
                await interaction.editReply({ content: 'An unknown error occurred while executing this command.' }).catch(() => {});
