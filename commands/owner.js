@@ -37,7 +37,7 @@ module.exports = {
                 .addBooleanOption(option =>
                     option.setName('prune_stats')
                         .setDescription('Also prune group_stats older than message_history_days? (Default: False)') // Shortened description
-                ))
+                )
                 .addIntegerOption(option =>
                     option.setName('batch_size')
                         .setDescription('Number of messages to delete per batch (e.g., 10000). Use if disk is full.')))
