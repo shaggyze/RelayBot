@@ -100,15 +100,17 @@ module.exports = {
             
             const avatarURL = message.author.displayAvatarURL();
             
-            for (const target of targetChannels) {
+        let isFirstTarget = true;
+
+        for (const target of targetChannels) {
             try {
                 const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
                 console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
                 
-                let replyEmbed = null; // This will be re-created for each target channel in the loop.
+                let replyEmbed = null;
                 
-                // This 'if' block will now run for EVERY target channel if the original message is a reply.
-                if (message.reference && message.reference.messageId) {
+                // [THE FIX] This entire block now only runs for the FIRST target channel.
+                if (isFirstTarget && message.reference && message.reference.messageId) {
                     let repliedMessage;
                     try {
                         repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
@@ -125,14 +127,13 @@ module.exports = {
                         }
 
                         // --- Two-Step Database Lookup to find the root original message ID ---
+                        // This logic is kept to ensure the first link is as accurate as possible.
                         let rootOriginalId;
                         const repliedToId = repliedMessage.id;
                         const parentInfo = db.prepare('SELECT original_message_id FROM relayed_messages WHERE relayed_message_id = ?').get(repliedToId);
                         if (parentInfo) {
-                            // The message being replied to IS a relayed message. Its root is the original_message_id.
                             rootOriginalId = parentInfo.original_message_id;
                         } else {
-                            // The message being replied to is a normal user message. Its root is its own ID.
                             rootOriginalId = repliedToId;
                         }
 
@@ -141,10 +142,9 @@ module.exports = {
 
                         let messageLink = null;
                         if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
-                            // If we found a match, create the server-specific link.
                             messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                         } else {
-                            // Fallback: If no match is found (e.g., pruned), link to the root original message.
+                            // Fallback link to the root original message
                             const originalMessageInfo = db.prepare('SELECT original_channel_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(rootOriginalId);
                             if(originalMessageInfo) {
                                 const originalGuildId = message.client.channels.cache.get(originalMessageInfo.original_channel_id)?.guild.id;
@@ -154,7 +154,7 @@ module.exports = {
                             }
                         }
                         
-                        // Create a NEW, unique author embed for this specific target server.
+                        // Create the author embed, which will only happen once.
                         replyEmbed = new EmbedBuilder()
                             .setColor('#B0B8C6')
                             .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
