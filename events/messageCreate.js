@@ -106,28 +106,29 @@ module.exports = {
                     console.log(`[RELAY][${executionId}] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
                     
                     let replyEmbed = null;
-                    if (message.reference && message.reference.messageId) {
-                        let repliedMessage;
-                        try {
-                            repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
-                        } catch {
-                            replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
-                        }
-                        if (repliedMessage) {
-                            const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
-                            const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
-                            let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
-                            if (repliedMessage.editedTimestamp) {
-                                repliedContent += ' *(edited)*';
-                            }
-                            const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(repliedMessage.id, target.channel_id);
-                            let messageLink = null;
-                            if (relayedReplyInfo && target.guild_id && target.channel_id && relayedReplyInfo.relayed_message_id) {
-                                messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
-                            }
-                            replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
-                        }
-                    }
+					if (message.reference && message.reference.messageId) {
+						let repliedMessage;
+						try {
+							repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
+						} catch {
+							replyEmbed = new EmbedBuilder().setColor('#444444').setDescription('*Replying to a deleted or inaccessible message.*');
+						}
+						if (repliedMessage) {
+							const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
+							const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
+							let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
+							if (repliedMessage.editedTimestamp) {
+								repliedContent += ' *(edited)*';
+							}
+							const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(repliedMessage.id, target.channel_id);
+							let messageLink = null;
+							if (relayedReplyInfo && target.guild_id && target.channel_id && relayedReplyInfo.relayed_message_id) {
+								messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
+							}
+							replyEmbed = new EmbedBuilder().setColor('#444444').setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
+						}
+						message.reference = null;
+					}
 
                     let targetContent = message.content;
                     let hasUnmappedRoles = false;
