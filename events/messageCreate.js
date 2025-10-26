@@ -120,13 +120,17 @@ module.exports = {
 							if (repliedMessage.editedTimestamp) {
 								repliedContent += ' *(edited)*';
 							}
+							console.log(`[REPLY-DEBUG] Looking for replied-to message. Original ID: ${repliedMessage.id}, Target Channel ID: ${target.channel_id}`);
 							const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(repliedMessage.id, target.channel_id);
 							let messageLink = null;
-							if (relayedReplyInfo && target.guild_id && target.channel_id && relayedReplyInfo.relayed_message_id) {
-                            messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
-                        }
-                        replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
-                    }
+							if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
+								console.log(`[REPLY-DEBUG] Found corresponding relayed message. Relayed ID: ${relayedReplyInfo.relayed_message_id}`);
+								messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
+							} else {
+								console.log(`[REPLY-DEBUG] No corresponding relayed message found in the database for this target channel.`);
+							}
+								replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
+						}
 					}
 
                     let targetContent = message.content;
