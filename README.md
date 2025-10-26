@@ -204,4 +204,20 @@ If you see a long error log during `npm install` that mentions `better-sqlite3`,
 </details>
 
 ---
-*This bot was originally conceived by YuRaNnNzZZ and ShaggyZE and has been refactored for public use.*
+
+### Legal & Licensing
+
+Your use of RelayBot is subject to the following legal documents. By adding the bot to your server, you are agreeing to these terms.
+
+<details>
+<summary>documents</summary>
+
+*   **[Terms & Conditions](https://github.com/shaggyze/RelayBot/blob/main/terms-conditions.md)**: Outlines the rules for using the bot, acceptable use, and our disclaimers.
+*   **[Privacy Policy](https://github.com/shaggyze/RelayBot/blob/main/privacy-policy.md)**: Details what data the bot collects, how it is used, and your rights regarding that data.
+*   **[ISC License](https://github.com/shaggyze/RelayBot/blob/main/LICENSE)**: RelayBot is open-source software. This license grants you broad permissions to use, modify, and distribute the software.
+
+The bot is provided "as is", without warranty of any kind.
+</details>
+
+---
+*This bot was originally conceived by [YuRaNnNzZZ](https://github.com/YuRaNnNzZZ/discord-message-relay-bot) then ShaggyZE and has been refactored for public use.*

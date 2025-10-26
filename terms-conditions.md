@@ -39,7 +39,7 @@ As a server administrator, you are responsible for the configuration of the bot 
 
 #### 6. Intellectual Property and Open-Source License
 
-RelayBot is free and open-source software released under the **MIT License**. The copyright for the software is retained by the project owner(s) as specified in the license file.
+RelayBot is free and open-source software released under the **ISC License**. The copyright for the software is retained by the project owner(s) as specified in the license file.
 
 The MIT License grants you broad permissions, including but not limited to, the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software. A condition of this license is that the original copyright notice and the full text of the MIT License must be included in all copies or substantial portions of the software.
 
