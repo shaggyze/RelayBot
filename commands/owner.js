@@ -325,16 +325,16 @@ module.exports = {
                         { name: 'Orphaned Webhooks Pruned', value: `${prunedWebhooks}`, inline: true }
                     );
 
-                // Add message history and stats pruning results only if the option was used
+                // Add message history results if the operation ran
                 if (messageHistoryDays !== null && messageHistoryDays > 0) {
                     let statsPruningStatus = `(Group stats were intentionally left intact)`;
                     if (pruneStats) {
                          statsPruningStatus = `Pruned **${prunedStats}** group stats entries.`;
                     }
                     resultsEmbed.addFields({
-                        name: `Relayed Messages History (Older than ${messageHistoryDays} days)`,
-                        value: `Pruned **${prunedMessages}** message links. ${statsPruningStatus}`,
-                        inline: false // Full width for this field
+                        name: `Message History (Older than ${messageHistoryDays} days)`,
+                        value: `Pruned **${totalPrunedMessages}** message links. ${statsPruningStatus}`,
+                        inline: false
                     });
                 }
                 
@@ -345,7 +345,7 @@ module.exports = {
                 }
                 
                 await interaction.editReply({ embeds: [resultsEmbed] });
-                console.log(`[Manual Prune] Summary Report: ${prunedGroups} groups, ${prunedLinks} links, ${prunedMappings} mappings, ${prunedWebhooks} webhooks, ${prunedMessages} messages, ${prunedStats} stats.`);
+                console.log(`[Manual Prune] Summary Report: ${prunedGroups} groups, ${prunedLinks} links, ${prunedMappings} mappings, ${prunedWebhooks} webhooks, ${totalPrunedMessages} messages, ${prunedStats} stats.`);
 
             } else if (subcommand === 'upload_db') {
                 await interaction.deferReply({ ephemeral: true });
