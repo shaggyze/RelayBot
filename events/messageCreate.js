@@ -34,7 +34,9 @@ module.exports = {
         let shouldLogVerbose = false; // Flag to control extensive logging for problematic payloads
 
         try {
-            if (message.author.bot || !message.guild) return;
+			if (message.author.bot || !message.guild || message.webhookId) {
+				return;
+			}
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
