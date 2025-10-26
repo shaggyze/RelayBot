@@ -109,7 +109,7 @@ module.exports = {
                         try {
                             repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                         } catch {
-                            replyEmbed = new EmbedBuilder().setColor('#444444').setDescription('*Replying to a deleted or inaccessible message.*');
+                            replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
                         }
                         if (repliedMessage) {
                             const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
@@ -123,7 +123,7 @@ module.exports = {
                             if (relayedReplyInfo && target.guild_id && target.channel_id && relayedReplyInfo.relayed_message_id) {
                                 messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                             }
-                            replyEmbed = new EmbedBuilder().setColor('#444444').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
+                            replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
                         }
                     }
 
