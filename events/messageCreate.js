@@ -101,66 +101,66 @@ module.exports = {
             const avatarURL = message.author.displayAvatarURL();
             
             for (const target of targetChannels) {
-                try {
-                    const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                    console.log(`[RELAY][${executionId}] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
-                    
-                    let replyEmbed = null;
-					if (message.reference && message.reference.messageId) {
-						let repliedMessage;
-						try {
-							repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
-						} catch {
-							replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
-						}
-						if (repliedMessage) {
-							const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
-							const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
-							let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
-							if (repliedMessage.editedTimestamp) {
-								repliedContent += ' *(edited)*';
-							}
-							console.log(`[REPLY-DEBUG] Looking for replied-to message. Original ID: ${repliedMessage.id}, Target Channel ID: ${target.channel_id}`);
-							let rootOriginalId;
-        const repliedToId = repliedMessage.id;
+            try {
+                const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
+                console.log(`[RELAY] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
+                
+                let replyEmbed = null; // This will be re-created for each target channel in the loop.
+                
+                // This 'if' block will now run for EVERY target channel if the original message is a reply.
+                if (message.reference && message.reference.messageId) {
+                    let repliedMessage;
+                    try {
+                        repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
+                    } catch {
+                        replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
+                    }
 
-        // Check if the message we replied to was a relayed message.
-        const parentInfo = db.prepare('SELECT original_message_id FROM relayed_messages WHERE relayed_message_id = ?').get(repliedToId);
+                    if (repliedMessage) {
+                        const repliedAuthorName = repliedMessage.member?.displayName ?? repliedMessage.author.username;
+                        const repliedAuthorAvatar = repliedMessage.author.displayAvatarURL();
+                        let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
+                        if (repliedMessage.editedTimestamp) {
+                            repliedContent += ' *(edited)*';
+                        }
 
-        if (parentInfo) {
-            // YES, we replied to a relayed message. The true root is its original_message_id.
-            rootOriginalId = parentInfo.original_message_id;
-            console.log(`[REPLY-DEBUG] Replied to a relayed message. Root Original ID found: ${rootOriginalId}`);
-        } else {
-            // NO, we replied to an original user-sent message. The root is its own ID.
-            rootOriginalId = repliedToId;
-            console.log(`[REPLY-DEBUG] Replied to an original message. Root Original ID is: ${rootOriginalId}`);
-        }
+                        // --- Two-Step Database Lookup to find the root original message ID ---
+                        let rootOriginalId;
+                        const repliedToId = repliedMessage.id;
+                        const parentInfo = db.prepare('SELECT original_message_id FROM relayed_messages WHERE relayed_message_id = ?').get(repliedToId);
+                        if (parentInfo) {
+                            // The message being replied to IS a relayed message. Its root is the original_message_id.
+                            rootOriginalId = parentInfo.original_message_id;
+                        } else {
+                            // The message being replied to is a normal user message. Its root is its own ID.
+                            rootOriginalId = repliedToId;
+                        }
 
-        // [THE FIX - STEP 2] Use the ROOT original ID for the lookup.
-        console.log(`[REPLY-DEBUG] Looking for siblings of root ID ${rootOriginalId} in target channel ${target.channel_id}`);
-        const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(rootOriginalId, target.channel_id);
+                        // --- Find the corresponding relayed message for THIS specific target channel ---
+                        const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(rootOriginalId, target.channel_id);
 
-        let messageLink = null;
-        if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
-            console.log(`[REPLY-DEBUG] Found corresponding relayed message. Relayed ID: ${relayedReplyInfo.relayed_message_id}`);
-            messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
-        } else {
-            // Fallback for pruned messages or other edge cases.
-            console.log(`[REPLY-DEBUG] No corresponding relayed message found. Creating fallback link to original message.`);
-            // This now links to the ROOT original message, which is more useful.
-            const originalMessageInfo = db.prepare('SELECT original_channel_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(rootOriginalId);
-            if(originalMessageInfo) {
-                const originalGuildId = message.client.channels.cache.get(originalMessageInfo.original_channel_id)?.guild.id;
-                if(originalGuildId) {
-                    messageLink = `https://discord.com/channels/${originalGuildId}/${originalMessageInfo.original_channel_id}/${rootOriginalId}`;
+                        let messageLink = null;
+                        if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
+                            // If we found a match, create the server-specific link.
+                            messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
+                        } else {
+                            // Fallback: If no match is found (e.g., pruned), link to the root original message.
+                            const originalMessageInfo = db.prepare('SELECT original_channel_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(rootOriginalId);
+                            if(originalMessageInfo) {
+                                const originalGuildId = message.client.channels.cache.get(originalMessageInfo.original_channel_id)?.guild.id;
+                                if(originalGuildId) {
+                                    messageLink = `https://discord.com/channels/${originalGuildId}/${originalMessageInfo.original_channel_id}/${rootOriginalId}`;
+                                }
+                            }
+                        }
+                        
+                        // Create a NEW, unique author embed for this specific target server.
+                        replyEmbed = new EmbedBuilder()
+                            .setColor('#B0B8C6')
+                            .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
+                            .setDescription(repliedContent);
+                    }
                 }
-            }
-        }
-        
-        replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
-    }
-}
 
                     let targetContent = message.content;
                     let hasUnmappedRoles = false;
