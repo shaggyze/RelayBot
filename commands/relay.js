@@ -152,7 +152,7 @@ module.exports = {
                             const channel = interaction.client.channels.cache.get(info.id);
                             // [THE FIX - PART 2] Append the direction to the output string.
                             const directionFormatted = `(Direction: **${info.dir}**)`;
-                            description += `  └─ ${channel ? `<#${info.id}> (#${channel.name})(ID: \`${info.id}\`)` : `Inaccessible Channel (ID: \`${info.id}\`)`} ${directionFormatted}\n`;
+                            description += `  └─ ${channel ? `<#${info.id}> (#${channel.name}) (ID: \`${info.id}\`)` : `Inaccessible Channel (ID: \`${info.id}\`)`} ${directionFormatted}\n`;
                         }
                     } else {
                         description += `  └─ *(No channels linked from this server)*\n`;
