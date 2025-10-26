@@ -123,7 +123,7 @@ module.exports = {
                             if (relayedReplyInfo && target.guild_id && target.channel_id && relayedReplyInfo.relayed_message_id) {
                                 messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                             }
-                            replyEmbed = new EmbedBuilder().setColor('#444444').setAuthor({ name: `└─Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
+                            replyEmbed = new EmbedBuilder().setColor('#444444').setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar }).setDescription(repliedContent);
                         }
                     }
 
