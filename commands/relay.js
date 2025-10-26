@@ -1,7 +1,9 @@
 // commands/relay.js
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
 const { isSupporter } = require('../utils/supporterManager.js');
+
+const BOT_OWNER_ID = '182938628643749888';
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -18,11 +20,11 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('map_role').setDescription('Maps a server role to a common name for relaying.').addStringOption(option => option.setName('group_name').setDescription('The global group this mapping applies to').setRequired(true)).addStringOption(option => option.setName('common_name').setDescription('The shared name for the role').setRequired(true)).addRoleOption(option => option.setName('role').setDescription('The actual role to map').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('list_mappings').setDescription('Lists all configured role mappings for a group on this server.').addStringOption(option => option.setName('group_name').setDescription('The name of the group to list mappings for').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('unmap_role').setDescription('Removes a role mapping from a group.').addStringOption(option => option.setName('group_name').setDescription('The global group to unmap from').setRequired(true)).addStringOption(option => option.setName('common_name').setDescription('The common name of the role to unmap').setRequired(true)))
-        .addSubcommand(subcommand => subcommand.setName('set_delete_delay').setDescription('Sets the auto-delete delay for messages in this channel (0 to disable).').addIntegerOption(option => option.setName('hours').setDescription('How many hours before messages are deleted').setRequired(true).setMinValue(0).setMaxValue(720)))
+        .addSubcommand(subcommand => subcommand.setName('set_direction').setDescription('Sets the direction of a channel from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the relay group.').setRequired(true)).addChannelOption(option => option.setName('channel_id').setDescription('The ID of the channel you want to modify.').setRequired(true)).addStringOption(option => option.setName('direction').setDescription('The new relay direction for this channel.').setRequired(true).addChoices({ name: 'Both (Send & Receive)', value: 'BOTH' }, { name: 'Send Only', value: 'SEND_ONLY' }, { name: 'Receive Only', value: 'RECEIVE_ONLY' })))
+		.addSubcommand(subcommand => subcommand.setName('set_delete_delay').setDescription('Sets the auto-delete delay for messages in this channel (0 to disable).').addIntegerOption(option => option.setName('hours').setDescription('How many hours before messages are deleted').setRequired(true).setMinValue(0).setMaxValue(720)))
         .addSubcommand(subcommand => subcommand.setName('toggle_forward_delete').setDescription('Toggle if deleting an original message also deletes its copies (ON by default).'))
         .addSubcommand(subcommand => subcommand.setName('toggle_reverse_delete').setDescription('Toggle if deleting a relayed copy also deletes the original message (OFF by default).'))
-        .addSubcommand(subcommand => subcommand.setName('set_direction').setDescription('Sets the direction of a channel from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the relay group.').setRequired(true)).addChannelOption(option => option.setName('channel').setDescription('The channel you want to modify.').addChannelTypes(ChannelType.GuildText).setRequired(true)).addStringOption(option => option.setName('direction').setDescription('The new relay direction for this channel.').setRequired(true).addChoices({ name: 'Both (Send & Receive)', value: 'BOTH' }, { name: 'Send Only', value: 'SEND_ONLY' }, { name: 'Receive Only', value: 'RECEIVE_ONLY' }))),
-		
+	,
     async execute(interaction) {
         if (!interaction.inGuild()) {
             return await interaction.reply({ content: 'This command can only be used inside a server.', ephemeral: true });
@@ -150,7 +152,7 @@ module.exports = {
                             const channel = interaction.client.channels.cache.get(info.id);
                             // [THE FIX - PART 2] Append the direction to the output string.
                             const directionFormatted = `(Direction: **${info.dir}**)`;
-                            description += `  └─ ${channel ? `<#${info.id}> (#${channel.name})` : `Inaccessible Channel (ID: \`${info.id}\`)`} ${directionFormatted}\n`;
+                            description += `  └─ ${channel ? `<#${info.id}> (#${channel.name})(ID: \`${info.id}\`)` : `Inaccessible Channel (ID: \`${info.id}\`)`} ${directionFormatted}\n`;
                         }
                     } else {
                         description += `  └─ *(No channels linked from this server)*\n`;
@@ -212,41 +214,47 @@ module.exports = {
 				await interaction.deferReply({ ephemeral: true });
 
 				const groupName = interaction.options.getString('group_name');
-				const targetChannel = interaction.options.getChannel('channel');
+				// [THE FIX] Get the channel ID from the string option
+				const targetChannelId = interaction.options.getString('channel_id');
 				const newDirection = interaction.options.getString('direction');
 
 				try {
-					// 1. Find the group and verify ownership and permissions.
+                // 1. Find the group and verify ownership and permissions.
 					const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
 
 					if (!group) {
 						return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${groupName}".` });
 					}
+                
+					// You can run this from any server, but you must be the bot owner for cross-server changes.
+					// We'll keep the administrator check for the owning server, but add a bot owner override.
+					const isBotOwner = interaction.user.id === BOT_OWNER_ID; // <-- IMPORTANT: SET YOUR ID HERE
+					const isGroupOwnerAdmin = interaction.guild.id === group.owner_guild_id && interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
-					if (interaction.guild.id !== group.owner_guild_id) {
-						return interaction.editReply({ content: `❌ **Permission Denied:** This command can only be run on the server that owns the "${groupName}" group.` });
+					if (!isBotOwner && !isGroupOwnerAdmin) {
+						return interaction.editReply({ content: `❌ **Permission Denied:** This command can only be run by the bot owner or an administrator on the server that owns the "${groupName}" group.` });
 					}
 
-					if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-						return interaction.editReply({ content: '❌ **Permission Denied:** You must be an administrator to manage relay groups.' });
-					}
-
-					// 2. Verify that the channel is actually linked to this group.
-					const link = db.prepare('SELECT channel_id FROM linked_channels WHERE group_id = ? AND channel_id = ?').get(group.group_id, targetChannel.id);
+					// 2. Verify that the channel is actually linked to this group using the ID.
+					const link = db.prepare('SELECT channel_id FROM linked_channels WHERE group_id = ? AND channel_id = ?').get(group.group_id, targetChannelId);
 
 					if (!link) {
-						return interaction.editReply({ content: `❌ **Error:** The channel ${targetChannel} is not part of the "${groupName}" relay group.` });
+						return interaction.editReply({ content: `❌ **Error:** The channel ID \`${targetChannelId}\` is not part of the "${groupName}" relay group.` });
 					}
 
-					// 3. Perform the update.
-					const result = db.prepare('UPDATE linked_channels SET direction = ? WHERE channel_id = ? AND group_id = ?').run(newDirection, targetChannel.id, group.group_id);
+					// 3. Perform the update using the ID.
+					const result = db.prepare('UPDATE linked_channels SET direction = ? WHERE channel_id = ? AND group_id = ?').run(newDirection, targetChannelId, group.group_id);
+
+					// Try to fetch the channel to display its name in the success message
+					const targetChannel = await interaction.client.channels.fetch(targetChannelId).catch(() => null);
+					const channelMention = targetChannel ? `<#${targetChannel.id}>` : `channel \`${targetChannelId}\``;
 
 					if (result.changes > 0) {
-						await interaction.editReply({ content: `✅ **Success!** The direction for ${targetChannel} in the **${groupName}** group has been set to \`${newDirection}\`.` });
+						await interaction.editReply({ content: `✅ **Success!** The direction for ${channelMention} in the **${groupName}** group has been set to \`${newDirection}\`.` });
 					} else {
-						await interaction.editReply({ content: '⚠️ **Warning:** The channel already had that direction set. No changes were made.' });
+						await interaction.editReply({ content: `⚠️ **Warning:** The ${channelMention} already had that direction set. No changes were made.` });
 					}
-				
+
 				} catch (error) {
 					console.error('Error in /relay set_direction:', error);
 					await interaction.editReply({ content: 'An unexpected error occurred while trying to set the channel direction. Please check the logs.' });
