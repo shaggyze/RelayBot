@@ -424,5 +424,6 @@ module.exports = {
             }
             console.error(`[ERROR] Code:`, error.code);
             console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
+        }
     },
 };
