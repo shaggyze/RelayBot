@@ -198,7 +198,7 @@ module.exports = {
                     if (replyEmbed) {
                         basePayloadForSizeCalc.embeds.push(replyEmbed);
                     }
-
+					isFirstTarget = false;
                     let stickerId = null;
                     if (message.stickers.size > 0) {
                         const sticker = message.stickers.first();
@@ -451,6 +451,7 @@ module.exports = {
                 }
             }
         } catch (error) {
+			isFirstTarget = false;
             // This catches fatal errors not specific to a target channel's send attempt
             if (error.code === 40005) { // If a fatal 40005 occurred
                  shouldLogVerbose = true; 
