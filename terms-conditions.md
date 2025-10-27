@@ -43,7 +43,7 @@ RelayBot is free and open-source software released under the **ISC License**. Th
 
 The MIT License grants you broad permissions, including but not limited to, the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software. A condition of this license is that the original copyright notice and the full text of the MIT License must be included in all copies or substantial portions of the software.
 
-For the full terms, please refer to the [MIT License](https://github.com/shaggyze/RelayBot/blob/main/LICENSE) on the official GitHub repository.
+For the full terms, please refer to the [ISC License](https://github.com/shaggyze/RelayBot/blob/main/LICENSE) on the official GitHub repository.
 
 #### 7. Termination
 

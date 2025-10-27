@@ -137,10 +137,15 @@ module.exports = {
     async execute(client) {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
-        
-        primeMemberCache(client);
 
-        await fetchSupporterIds();
+        console.log('[Startup] Caching members for all guilds...');
+        primeMemberCache(client);
+        console.log('[Startup] Member cache priming complete.');
+
+        console.log('[Startup] Performing initial fetch of supporter list...');
+        fetchSupporterIds();
+        console.log('[Startup] Initial supporter list loaded.');
+
         const oneHourInMs = 60 * 60 * 1000;
         setInterval(fetchSupporterIds, oneHourInMs);
         
@@ -193,10 +198,11 @@ module.exports = {
                 console.log(`[DB-Prune] Pruning relayed_messages older than Snowflake ID: ${cutoffIdString}`);
                 const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
                 
-                console.log(`[DB-Prune] Pruning group_stats for days older than: ${cutoffDayString}`);
-                const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
+                //console.log(`[DB-Prune] Pruning group_stats for days older than: ${cutoffDayString}`);
+                //const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
 
-                console.log(`[DB-Prune] Success! Pruned ${resultMessages.changes} old message links and ${resultStats.changes} old daily stats.`);
+                console.log(`[DB-Prune] Success! Pruned ${resultMessages.changes} old message links.`);
+				//console.log(`[DB-Prune] Success! Pruned ${resultStats.changes} old daily stats.`);
             } catch (error) {
                 console.error('[DB-Prune] An error occurred during the daily pruning task:', error);
             }

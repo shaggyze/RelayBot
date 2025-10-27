@@ -76,29 +76,36 @@ function triggerCleanup() {
 async function fetchSupporterIds() {
     console.log('[Supporters] Starting supporter list update...');
     
-    await triggerCleanup();
+    triggerCleanup();
 
-    console.log('[Supporters] Fetching updated patron and voter lists...');
-    const [patronData, voterData] = await Promise.all([
-        fetchFile(PATRON_LIST_URL),
-        fetchFile(VOTER_LIST_URL)
-    ]);
+    try {
+        console.log('[Supporters] Fetching updated patron and voter lists...');
+        const [patronData, voterData] = await Promise.all([
+            fetchFile(PATRON_LIST_URL),
+            fetchFile(VOTER_LIST_URL)
+        ]);
 
-    const combinedIds = new Set();
-    const patronList = patronData.split(/\s+/).filter(id => id.length > 0);
-    const voterList = voterData.split(/\s+/).filter(line => line.length > 0);
-    const patronCount = patronList.length;
-    const voterCount = voterList.length;
+        const combinedIds = new Set();
+		const patronList = patronData.split(/\s+/).filter(id => id.length > 0);
+		const voterList = voterData.split(/\s+/).filter(line => line.length > 0);
+		const patronCount = patronList.length;
+		const voterCount = voterList.length;
 
-    patronList.forEach(id => combinedIds.add(id));
-    voterList.forEach(line => {
-        const userId = line.split(',')[0];
-        if (userId) combinedIds.add(userId);
-    });
+		patronList.forEach(id => combinedIds.add(id));
+		voterList.forEach(line => {
+			const userId = line.split(',')[0];
+			if (userId) combinedIds.add(userId);
+		});
     
-    supporterIds = combinedIds;
-    console.log(`[Supporters] Successfully loaded ${patronCount} patrons and ${voterCount} active voters. Total unique supporters: ${supporterIds.size}`);
+        // Only replace the list on a successful fetch.
+        supporterIds = combinedIds;
+        console.log(`[Supporters] SUCCESS: Loaded ${patronCount} patrons and ${voterCount} active voters. Total unique supporters: ${supporterIds.size}`);
+    } catch (error) {
+        // If any fetch fails, keep the old list and log the error.
+        console.error(`[Supporters] FAILED to fetch lists: ${error.message}. Using cached list of ${supporterIds.size} supporters.`);
+    }
 }
+
 
 function isSupporter(userId) {
     return supporterIds.has(userId);
