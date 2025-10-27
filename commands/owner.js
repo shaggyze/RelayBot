@@ -45,7 +45,18 @@ module.exports = {
             subcommand
                 .setName('upload_db')
                 .setDescription('Uploads the database to your secure web server endpoint.'))
-	,
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('leave_inactive')
+                .setDescription('Leaves servers that have had no relay activity for a specified time.')
+                .addIntegerOption(option =>
+                    option.setName('days_inactive')
+                        .setDescription('The number of days a server must be inactive to be considered for leaving.')
+                        .setRequired(true))
+                .addBooleanOption(option =>
+                    option.setName('dry_run')
+                        .setDescription('If true, will only list servers to leave without actually leaving. (Default: True)')))
+    ,
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
             return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
@@ -409,6 +420,91 @@ module.exports = {
                         interaction.editReply({ content: `Failed to parse the server response. Raw output: \`\`\`${stdoutStr}\`\`\`` });
                     }
                 });
+            } else if (subcommand === 'leave_inactive') {
+                await interaction.deferReply({ ephemeral: true });
+
+                const daysInactive = interaction.options.getInteger('days_inactive');
+                const isDryRun = interaction.options.getBoolean('dry_run') ?? true; // Default to a safe dry run
+
+                if (daysInactive <= 0) {
+                    return interaction.editReply({ content: '❌ Please provide a positive number of days.' });
+                }
+
+                // --- LOGIC TO FIND INACTIVE SERVERS ---
+
+                // 1. Calculate the cutoff date.
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - daysInactive);
+                const cutoffDateString = cutoffDate.toISOString().slice(0, 10);
+
+                // 2. Get a set of all guild IDs that HAVE been active recently.
+                const activeGuildsQuery = db.prepare(`
+                    SELECT DISTINCT lc.guild_id
+                    FROM linked_channels lc
+                    JOIN group_stats gs ON lc.group_id = gs.group_id
+                    WHERE gs.day >= ?
+                `).all(cutoffDateString);
+                const activeGuildIds = new Set(activeGuildsQuery.map(row => row.guild_id));
+
+                // 3. Get a list of all guilds the bot is currently in.
+                const allGuildsIn = Array.from(interaction.client.guilds.cache.values());
+
+                // 4. Determine which guilds are inactive by finding the ones not in the active set.
+                const inactiveGuilds = allGuildsIn.filter(guild => !activeGuildIds.has(guild.id));
+
+                if (inactiveGuilds.length === 0) {
+                    return interaction.editReply({ content: `✅ No inactive servers found matching the criteria.` });
+                }
+
+                // --- EXECUTE THE ACTION (DRY RUN OR ACTUAL LEAVE) ---
+
+                if (isDryRun) {
+                    // DRY RUN: Just list the servers that would be left.
+                    const serverList = inactiveGuilds.map(g => `• ${g.name} (ID: \`${g.id}\`)`).join('\n');
+                    
+                    const embed = new EmbedBuilder()
+                        .setTitle(`Dry Run: Inactive Servers to Leave (${inactiveGuilds.length})`)
+                        .setColor('#FFA500') // Orange for warning
+                        .setDescription(`The following servers have had no relay activity in the last **${daysInactive}** days. If this were not a dry run, the bot would leave them.\n\n${serverList}`)
+                        .setFooter({ text: 'To proceed, run this command again with the `dry_run` option set to `False`.' });
+                    
+                    return interaction.editReply({ embeds: [embed] });
+
+                } else {
+                    // ACTUAL LEAVE: Iterate and leave the servers.
+                    let successCount = 0;
+                    let failCount = 0;
+                    const failedGuilds = [];
+
+                    await interaction.editReply({ content: `Leaving ${inactiveGuilds.length} inactive servers... This may take a moment.` });
+
+                    for (const guild of inactiveGuilds) {
+                        try {
+                            await guild.leave();
+                            console.log(`[INACTIVE-LEAVE] Successfully left guild: ${guild.name} (${guild.id})`);
+                            successCount++;
+                        } catch (error) {
+                            console.error(`[INACTIVE-LEAVE] FAILED to leave guild: ${guild.name} (${guild.id}). Error: ${error.message}`);
+                            failCount++;
+                            failedGuilds.push(`• ${guild.name} (\`${guild.id}\`)`);
+                        }
+                    }
+
+                    const embed = new EmbedBuilder()
+                        .setTitle('Inactive Server Cleanup Complete')
+                        .setColor('#5865F2')
+                        .setDescription(`Operation finished.`)
+                        .addFields(
+                            { name: 'Servers Left Successfully', value: `${successCount}`, inline: true },
+                            { name: 'Failed to Leave', value: `${failCount}`, inline: true }
+                        );
+                    
+                    if (failCount > 0) {
+                        embed.addFields({ name: 'Failed Servers', value: failedGuilds.join('\n') });
+                    }
+
+                    return interaction.editReply({ content: '', embeds: [embed] });
+                }
             }
         } catch (error) {
             console.error(`Error in /owner ${subcommand}:`, error);
