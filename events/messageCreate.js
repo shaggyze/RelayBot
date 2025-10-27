@@ -433,8 +433,8 @@ module.exports = {
                     // No separate `webhookClient.send` for large files needed here anymore.
 
                     if (relayedMessage) {
-                        db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, webhook_url, replied_to_id) VALUES (?, ?, ?, ?, ?, ?)')
-                          .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, target.webhook_url, message.reference?.messageId ?? null);
+                        db.prepare('INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, replied_to_id) VALUES (?, ?, ?, ?, ?)')
+                          .run(message.id, message.channel.id, relayedMessage.id, relayedMessage.channel_id, message.reference?.messageId ?? null);
                     }
                 } catch (error) {
                     // Catch any error from the try block associated with this target channel processing

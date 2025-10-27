@@ -65,27 +65,45 @@ async function rebuildAndEdit(client, originalMessageId) {
                 if (replyEmbed) payload.embeds.push(replyEmbed);
                 payload.embeds.push(...originalMessage.embeds);
 
-                try {
-                    const webhookClient = new WebhookClient({ url: relayed.webhook_url });
-                    await webhookClient.editMessage(relayed.relayed_message_id, payload);
-                    console.log(`[EDIT] SUCCESS: Updated relayed message ${relayed.relayed_message_id}`);
-                } catch (error) {
-                    if (error.code === 50006 && payload.stickers) {
-                        const sticker = originalMessage.stickers.first();
-                        if (sticker && sticker.name) {
-                            const fallbackPayload = payload;
-                            delete fallbackPayload.stickers;
-                            fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-                            const webhookClient = new WebhookClient({ url: relayed.webhook_url });
-                            await webhookClient.editMessage(relayed.relayed_message_id, fallbackPayload);
-                            console.log(`[EDIT] SUCCESS (Fallback): Updated relayed message ${relayed.relayed_message_id}`);
-                        }
-                    } else if (error.code === 10015) {
-                        db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(relayed.relayed_channel_id);
-                    } else {
-                        throw error;
-                    }
-                }
+				try {
+					// [THE FIX - STEP 1] Look up the webhook URL from the linked_channels table.
+					const channelLink = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(relayed.relayed_channel_id);
+
+					// [THE FIX - STEP 2] Check if the link still exists.
+					if (!channelLink || !channelLink.webhook_url) {
+						console.log(`[EDIT] SKIPPING: No valid webhook URL found for channel ${relayed.relayed_channel_id}. It may have been unlinked.`);
+						continue; // Skip to the next message in the loop
+					}
+
+					const webhookClient = new WebhookClient({ url: channelLink.webhook_url });
+					await webhookClient.editMessage(relayed.relayed_message_id, payload);
+					console.log(`[EDIT] SUCCESS: Updated relayed message ${relayed.relayed_message_id}`);
+				} catch (error) {
+					if (error.code === 50006 && payload.stickers) {
+						const sticker = originalMessage.stickers.first();
+						if (sticker && sticker.name) {
+							const fallbackPayload = { ...payload }; // Create a shallow copy to modify
+							delete fallbackPayload.stickers;
+							fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
+            
+							// We need the URL again for the fallback client
+							const channelLink = db.prepare('SELECT webhook_url FROM linked_channels WHERE channel_id = ?').get(relayed.relayed_channel_id);
+							if (channelLink && channelLink.webhook_url) {
+								const fallbackWebhookClient = new WebhookClient({ url: channelLink.webhook_url });
+								await fallbackWebhookClient.editMessage(relayed.relayed_message_id, fallbackPayload);
+								console.log(`[EDIT] SUCCESS (Fallback): Updated relayed message ${relayed.relayed_message_id}`);
+							}
+						}
+					} else if (error.code === 10015) { // Unknown Webhook
+						console.warn(`[EDIT] [AUTO-CLEANUP] Webhook for channel ${relayed.relayed_channel_id} is invalid. Removing from relay.`);
+						db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(relayed.relayed_channel_id);
+					} else {
+						// Ignore "Unknown Message" errors, but throw others
+						if (error.code !== 10008) {
+							console.error(`[EDIT] FAILED to edit relayed message ${relayed.relayed_message_id}:`, error);
+						}
+					}
+				}
             } catch (loopError) {
                 console.error(`[EDIT-LOOP-ERROR] A failure occurred while processing an update for relayed message ${relayed.relayed_message_id}:`, loopError);
             }

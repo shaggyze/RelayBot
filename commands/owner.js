@@ -343,7 +343,15 @@ module.exports = {
                     const displayGuildIds = guildIdsString.length > 1000 ? guildIdsString.substring(0, 1000) + '\n...' : guildIdsString;
                     resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${displayGuildIds}\`\`\``, inline: false });
                 }
-                
+
+				try {
+                    console.log('[Manual Prune] Starting VACUUM to reclaim disk space...');
+                    db.exec('VACUUM');
+                    console.log('[Manual Prune] VACUUM complete.');
+				} catch (vacuumError) {
+                    console.error('[Manual Prune] Could not complete VACUUM:', vacuumError);
+				}
+
                 await interaction.editReply({ embeds: [resultsEmbed] });
                 console.log(`[Manual Prune] Summary Report: ${prunedGroups} groups, ${prunedLinks} links, ${prunedMappings} mappings, ${prunedWebhooks} webhooks, ${totalPrunedMessages} messages, ${prunedStats} stats.`);
 
