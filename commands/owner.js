@@ -344,15 +344,22 @@ module.exports = {
                     resultsEmbed.addFields({ name: 'Orphaned Server IDs', value: `\`\`\`${displayGuildIds}\`\`\``, inline: false });
                 }
 
+                await interaction.editReply({ content: "Pruning complete. Now reclaiming disk space... (This may take a moment)", embeds: [resultsEmbed] });
+            
+				// [THE FIX] Add the VACUUM command here.
 				try {
-                    console.log('[Manual Prune] Starting VACUUM to reclaim disk space...');
-                    db.exec('VACUUM');
-                    console.log('[Manual Prune] VACUUM complete.');
-				} catch (vacuumError) {
-                    console.error('[Manual Prune] Could not complete VACUUM:', vacuumError);
-				}
+					console.log('[Manual Prune] Starting VACUUM to reclaim disk space...');
+					db.exec('VACUUM');
+					console.log('[Manual Prune] VACUUM complete.');
+                
+					const finalEmbed = new EmbedBuilder(resultsEmbed.toJSON()) // Re-use the existing embed data
+						.setFooter({ text: 'Disk space has been successfully reclaimed.' });
 
-                await interaction.editReply({ embeds: [resultsEmbed] });
+					await interaction.editReply({ content: "Pruning and space reclamation complete!", embeds: [finalEmbed] });
+				} catch (vacuumError) {
+					console.error('[Manual Prune] Could not complete VACUUM:', vacuumError);
+					await interaction.editReply({ content: 'Pruning complete, but an error occurred while reclaiming disk space. The file may still be large.' });
+				}
                 console.log(`[Manual Prune] Summary Report: ${prunedGroups} groups, ${prunedLinks} links, ${prunedMappings} mappings, ${prunedWebhooks} webhooks, ${totalPrunedMessages} messages, ${prunedStats} stats.`);
 
             } else if (subcommand === 'upload_db') {
