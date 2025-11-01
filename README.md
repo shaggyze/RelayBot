@@ -21,7 +21,7 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 - **Granular Deletion Toggles:** Separately control if deleting original messages deletes copies, and if deleting copies deletes the original.
 - **Group Moderation:** Group owners can block abusive users or entire servers from being relayed, giving you full control over your shared space.
 - **Customizable Branding:** Set a custom brand/tag for your server's relayed messages (e.g., `ShaggyZE [S1]`).
-- **Public Statistics:** View activity and engagement stats for any relay group.
+- **Public Statistics:** View activity and engagement stats for your relay group.
 - **Easy Setup & Management:** All configuration is done through user-friendly `/` slash commands.
 - **Scalable & Secure:** Built with a robust database backend to ensure every server's configuration is separate and secure.
 
@@ -98,7 +98,7 @@ The bot uses **global groups**. One server creates the group, and others link to
 - `/relay toggle_auto_role`: Enables/disables automatic role creation and linking for this channel.
 
 **Utility:**
-- `/relay stats`: Shows public activity statistics for a group.
+- `/stats`: Shows public activity statistics for your group.
 - `/invite`: Get a link to invite the bot to another server.
 - `/version`: Check the bot's current version.
 - `/vote`: Get links to vote for and support the bot.

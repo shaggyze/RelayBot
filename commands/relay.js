@@ -34,7 +34,6 @@ module.exports = {
 		.addSubcommand(subcommand => subcommand.setName('set_delete_delay').setDescription('Sets the auto-delete delay for messages in this channel (0 to disable).').addIntegerOption(option => option.setName('hours').setDescription('How many hours before messages are deleted').setRequired(true).setMinValue(0).setMaxValue(720)))
         .addSubcommand(subcommand => subcommand.setName('toggle_forward_delete').setDescription('Toggle if deleting an original message also deletes its copies (ON by default).'))
         .addSubcommand(subcommand => subcommand.setName('toggle_reverse_delete').setDescription('Toggle if deleting a relayed copy also deletes the original message (OFF by default).'))
-        .addSubcommand(subcommand => subcommand.setName('stats').setDescription('Shows public statistics for a relay group.').addStringOption(option => option.setName('group_name').setDescription('The name of the group to see stats for.').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('set_brand').setDescription('Sets a custom server brand/name for messages from this channel.').addStringOption(option => option.setName('name').setDescription('The custom name to display (e.g., "UGW"). Leave blank to remove.').setMaxLength(40)))
         .addSubcommand(subcommand => subcommand.setName('block').setDescription('Blocks a user or server from being relayed in a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own.').setRequired(true)).addStringOption(option => option.setName('target_id').setDescription('The User ID or Server ID to block.').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('unblock').setDescription('Unblocks a user or server from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own.').setRequired(true)).addStringOption(option => option.setName('target_id').setDescription('The User ID or Server ID to unblock.').setRequired(true)))
@@ -302,42 +301,6 @@ module.exports = {
             
             // --- NEW FEATURE LOGIC STARTS HERE ---
             
-            } else if (subcommand === 'stats') {
-				// Fetch unique guild IDs that are part of the group
-				const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(row => row.guild_id);
-
-				let totalMembers = 0;
-				let accessibleServerCount = 0; // Only count servers the bot is currently in
-
-				for (const guildId of uniqueGuildIds) {
-					const guild = interaction.client.guilds.cache.get(guildId);
-					if (guild) {
-						// Guild is accessible, so we can count its members and the server.
-						totalMembers += guild.memberCount;
-						accessibleServerCount++;
-					}
-					// Note: Servers the bot has been kicked from are ignored, which is fine.
-				}
-
-				const serverCount = uniqueGuildIds.length; // Total unique servers ever linked
-				const channelCount = db.prepare('SELECT COUNT(channel_id) as count FROM linked_channels WHERE group_id = ?').get(group.group_id).count;
-				const totalCharsResult = db.prepare('SELECT SUM(character_count) as total FROM group_stats WHERE group_id = ?').get(group.group_id);
-				const totalChars = totalCharsResult ? totalCharsResult.total : 0;
-
-				const statsEmbed = new EmbedBuilder()
-					.setTitle(`📊 Relay Group Statistics`)
-					.setColor('#5865F2')
-					.addFields(
-						{ name: 'Linked Servers', value: `${serverCount} (Bot in ${accessibleServerCount})`, inline: true }, // Updated server count display
-						{ name: 'Linked Channels', value: `${channelCount}`, inline: true },
-						{ name: 'Total Alliance Members', value: `${totalMembers.toLocaleString()}`, inline: true }, // The new field
-						{ name: 'Active Supporters', value: `${supporterCount}`, inline: true },
-						{ name: 'Total Characters Relayed', value: `${(totalChars || 0).toLocaleString()}`, inline: false }
-					)
-					.setTimestamp();
-
-				await interaction.editReply({ embeds: [statsEmbed] });
-
             } else if (subcommand === 'set_brand') {
                 const newBrand = interaction.options.getString('name') || null; 
                 const channelLink = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
