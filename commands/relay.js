@@ -98,9 +98,13 @@ module.exports = {
 				// --- Minimal Overwrite Fix ---
 				const existingLink = db.prepare('SELECT group_id, webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
 
-				// Check webhook permission regardless of existing link status
+				// [THE FIX] Define permissions at the start.
 				const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
-				if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks)) {
+				const canManageWebhooks = botPermissions.has(PermissionFlagsBits.ManageWebhooks);
+				// CRITICAL: Define canManageRoles using the general guild member permission
+				const canManageRoles = interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles); 
+
+				if (!canManageWebhooks) {
 					// ... (Error embed for missing webhook permission)
         			return interaction.editReply({ content: '❌ **Error:** I am missing the **Manage Webhooks** permission in this channel. I need this to create the link.' });
 				}
