@@ -138,7 +138,6 @@ module.exports = {
 					// CRUCIAL: Insert the NEW link record
 					db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction, allow_auto_role_creation) VALUES (?, ?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhookUrl, direction, allowAutoRole);
 				}
-                let syncReport = '';
 
                 // --- Auto-Role Syncing Logic ---
                 const channelSettings = db.prepare('SELECT allow_auto_role_creation FROM linked_channels WHERE channel_id = ?').get(channelId);
