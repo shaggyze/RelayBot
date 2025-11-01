@@ -7,7 +7,7 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName('stats')
         .setDescription('Shows activity statistics for the relay group linked to this channel.')
-        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+        .setDefaultMemberPermissions(0),
 
     async execute(interaction) {
         if (!interaction.inGuild()) {
