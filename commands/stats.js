@@ -35,21 +35,32 @@ module.exports = {
 
             let totalMembers = 0;
             let accessibleServerCount = 0;
-            let totalSupporters = 0;
+            
+            // [THE FIX] Use a Set to track UNIQUE supporter IDs across all guilds in the group
+            const uniqueSupporterIds = new Set();
             const supporterSet = getSupporterSet(); // Get the global set of supporter IDs
 
-            // Iterate through unique guilds to sum members and count accessible servers.
+            // Iterate through unique guilds to sum members and gather supporters.
             for (const guildId of uniqueGuildIds) {
                 const guild = interaction.client.guilds.cache.get(guildId);
                 if (guild) {
                     totalMembers += guild.memberCount;
                     accessibleServerCount++;
                     
-                    // Sum up the supporters in this guild who are in the global supporter set
-                    const supportersInGuild = guild.members.cache.filter(member => supporterSet.has(member.user.id)).size;
-                    totalSupporters += supportersInGuild;
+                    // Iterate over the members of this guild
+                    guild.members.cache.forEach(member => {
+                        // Check if the member's ID is in the global supporter set
+                        if (supporterSet.has(member.user.id)) {
+                            // Add the member's ID to our unique set for the group.
+                            // The Set automatically handles duplicates (if a user is a supporter in two guilds).
+                            uniqueSupporterIds.add(member.user.id);
+                        }
+                    });
                 }
             }
+            
+            // The final count is the size of the unique set.
+            const totalSupporters = uniqueSupporterIds.size;
 
             // 4. Fetch other group-wide stats.
             const serverCount = uniqueGuildIds.length;
@@ -58,7 +69,7 @@ module.exports = {
             const totalChars = totalCharsResult ? totalCharsResult.total : 0;
             
             const statsEmbed = new EmbedBuilder()
-                .setTitle(`📊 RelayBot Group Statistics`)
+                .setTitle(`📊 Relay Group Statistics`)
                 .setColor('#5865F2')
                 .addFields(
                     { name: 'Linked Servers', value: `${serverCount} (Bot in ${accessibleServerCount})`, inline: true },
