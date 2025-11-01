@@ -86,8 +86,9 @@ module.exports = {
                 } else {
                     await interaction.reply({ content: `That server was not found in the "**${groupName}**" group. No action was taken.`, ephemeral: true });
                 }
-            // This block REPLACES the entire `else if (subcommand === 'link_channel')` section in commands/relay.js
+				// This block REPLACES the entire `else if (subcommand === 'link_channel')` section in commands/relay.js
 			} else if (subcommand === 'link_channel') {
+				// 1. Initial Deferral
 				await interaction.deferReply({ ephemeral: true });
 
 				const groupName = interaction.options.getString('group_name');
@@ -95,65 +96,64 @@ module.exports = {
 				const channelId = interaction.channel.id;
 				const guildId = interaction.guild.id;
 
-				// --- CRITICAL FIX: Initialize all required variables outside the try block ---
-				let webhookUrl = null;
-				let existingLink = null; // Initialize to be available in the outer catch block
-				let allowAutoRole = 0;
-				let syncMessage = null; // Initialize to be available in the outer catch block
-				let finalContent = '';
-				
+				// --- CRITICAL FIX: Initialize all required variables for the full scope ---
+				let webhookUrl = null; 
+				let existingLink = null;
+				let syncMessage = null; // Holds the message for role sync status
+				let finalLinkStatus = '';
+
 				try {
 					// 1. Permissions and Group Checks
 					const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
 					const canManageWebhooks = botPermissions.has(PermissionFlagsBits.ManageWebhooks);
 					const canManageRoles = interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles); 
-				
+
 					if (!canManageWebhooks) {
 						const errorEmbed = new EmbedBuilder().setColor('#ED4245').setTitle('Permission Error').setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`).addFields({ name: 'How to Fix', value: 'An admin needs to ensure my role ("RelayBot") has the "Manage Webhooks" permission enabled here.' });
 						return interaction.editReply({ embeds: [errorEmbed] });
 					}
-					
+
 					const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
 					if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.` });
 
-
 					// 2. Overwrite/Re-link Logic (Handle existing link)
-					existingLink = db.prepare('SELECT group_id, webhook_url, allow_auto_role_creation FROM linked_channels WHERE channel_id = ?').get(channelId); // Assign to outer scope variable
+					existingLink = db.prepare('SELECT group_id, webhook_url, allow_auto_role_creation FROM linked_channels WHERE channel_id = ?').get(channelId);
+
+					let allowAutoRole = 0;
 
 					if (existingLink) {
 						// [OVERWRITE] Reuse existing webhook and grab the old auto-role setting.
 						webhookUrl = existingLink.webhook_url;
-						allowAutoRole = existingLink.allow_auto_role_creation;
-						
+						allowAutoRole = existingLink.allow_auto_role_creation; // Setting is OFF by default (0)
+
 						db.prepare('UPDATE linked_channels SET group_id = ?, direction = ? WHERE channel_id = ?').run(group.group_id, direction, channelId);
 
-						finalContent = `⚠️ **Link Overwritten:** Settings updated. Checking for role sync...`;
-						await interaction.editReply({ content: finalContent });
+						finalLinkStatus = `⚠️ **Link Overwritten:** Settings updated.`;
 					} else {
 						// [NEW LINK] Create new webhook and insert the link.
 						const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
 						webhookUrl = webhook.url;
-						
+
+						// AllowAutoRole remains 0 (default off) for a new link until user toggles it.
 						db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction, allow_auto_role_creation) VALUES (?, ?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhookUrl, direction, allowAutoRole);
 
-						finalContent = `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**. Checking for role sync...`;
-						await interaction.editReply({ content: finalContent });
+						finalLinkStatus = `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**.`;
 					}
 
 					// 3. Role Syncing and Final Status Logic
 					let syncReport = '';
-					
+
+					// Only run the role sync if the setting is ON.
 					if (allowAutoRole) {
-						// Send the 'Attempting to sync' message and CAPTURE its reference
-						syncMessage = await interaction.followUp({ content: '🔄 Role Sync: Attempting to sync roles...', ephemeral: true });
+						// Edit the DEFERRED REPLY with the initial status + 'attempting to sync' message.
+						syncMessage = await interaction.editReply({ content: finalLinkStatus + '\n\n' + '🔄 Role Sync: Attempting to sync roles...', ephemeral: true });
 
 						if (!canManageRoles) {
-							syncReport = '\n⚠️ **Sync Skipped:** Missing `Manage Roles` permission. Auto-syncing failed.';
+							finalSyncStatus = '\n⚠️ **Sync Skipped:** Missing `Manage Roles` permission. Auto-syncing failed.';
 						} else {
 							const masterRoleNames = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ?').all(group.group_id).map(r => r.role_name);
-							
+
 							if (masterRoleNames.length > 0) {
-								// Execution of sync logic
 								await interaction.guild.roles.fetch();
 								const serverRoles = interaction.guild.roles.cache;
 
@@ -165,7 +165,7 @@ module.exports = {
 									if (existingMapping) continue;
 
 									const existingRole = serverRoles.find(r => r.name === commonName);
-									
+
 									if (existingRole) {
 										db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, guildId, commonName, existingRole.id);
 										linkedCount++;
@@ -183,31 +183,23 @@ module.exports = {
 										}
 									}
 								}
-								syncReport = `\n✅ **Role Sync Complete:** Linked **${linkedCount}** existing roles and created **${createdCount}** new roles.`;
+								finalSyncStatus = `\n✅ **Role Sync Complete:** Linked **${linkedCount}** existing roles and created **${createdCount}** new roles.`;
 							} else {
-								syncReport = '\nℹ️ **Role Sync Info:** No mapped roles found in the group to sync.';
+								finalSyncStatus = '\nℹ️ **Role Sync Info:** No mapped roles found in the group to sync.';
 							}
 						}
-						
-						// Edit the 'Attempting to sync' message with the final result
-						// [FIX FOR BUG 1] Safely edit the syncMessage, ignoring the edit failure if it was already deleted by another error handler.
-						await syncMessage.edit({ content: syncMessage.content + syncReport }).catch(err => {
-							if (err.code === 10008) {
-								console.warn(`[SYNC-WARN] Failed to edit sync message (ID: ${syncMessage.id}). It was likely deleted by a race condition/error handler.`);
-							} else {
-								throw err; // Re-throw other edit errors
-							}
-						});
+
+						// 4. Edit the FINAL DEFERRED REPLY (the main interaction message) one last time.
+						await interaction.editReply({ content: finalLinkStatus + finalSyncStatus });
+
+					} else {
+						// If sync is NOT allowed, just ensure the original deferral is edited with the simple final status.
+						await interaction.editReply({ content: finalLinkStatus });
 					}
-
-					// 4. Final Confirmation: Edit the INITIAL deferred reply to ensure the user sees the final status
-					// The final, comprehensive message is always displayed here.
-					await interaction.editReply({ content: finalContent + syncReport });
-
 				} catch (error) {
 					// This catches errors like DB failures, Group lookup failures, etc.
 					console.error('Error in /relay link_channel:', error);
-					
+
 					// If a webhook was created but the DB insert failed, clean it up.
 					// We only clean up if the link was NEW (i.e., not an existingLink)
 					if (webhookUrl && !existingLink) { 
@@ -220,7 +212,7 @@ module.exports = {
 							console.error('Failed to clean up webhook after link_channel error:', e.message);
 						}
 					}
-					
+
 					// Attempt to edit the reply with a clear error message
 					await interaction.editReply({ content: '❌ A fatal error occurred during the link process. Please check the logs.' }).catch(() => {});
 				}
