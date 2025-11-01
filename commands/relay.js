@@ -86,115 +86,125 @@ module.exports = {
                 } else {
                     await interaction.reply({ content: `That server was not found in the "**${groupName}**" group. No action was taken.`, ephemeral: true });
                 }
-
-            } else if (subcommand === 'link_channel') {
+				// --- CORRECTED link_channel BLOCK START ---
+			} else if (subcommand === 'link_channel') {
 				await interaction.deferReply({ ephemeral: true });
 
 				const groupName = interaction.options.getString('group_name');
 				const direction = interaction.options.getString('direction') ?? 'BOTH';
-				const channelId = interaction.channel.id;
-				const guildId = interaction.guild.id;
-
-				// --- Minimal Overwrite Fix ---
-				const existingLink = db.prepare('SELECT group_id, webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
-
-				// [THE FIX] Define permissions at the start.
-				const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
-				const canManageWebhooks = botPermissions.has(PermissionFlagsBits.ManageWebhooks);
-				// CRITICAL: Define canManageRoles using the general guild member permission
-				const canManageRoles = interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles); 
-
-				if (!canManageWebhooks) {
-					// ... (Error embed for missing webhook permission)
-        			return interaction.editReply({ content: '❌ **Error:** I am missing the **Manage Webhooks** permission in this channel. I need this to create the link.' });
-				}
-
-				const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-				if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.` });
-
-				let webhookUrl;
-				let syncReport = '';
-
-				if (existingLink) {
-					// [THE FIX - Overwrite Logic]
-
-					// Use the existing webhook to avoid creating a new one (and orphaned ones).
-					webhookUrl = existingLink.webhook_url; 
-
-					// Update the existing row instead of deleting/re-inserting the link
-					db.prepare('UPDATE linked_channels SET group_id = ?, direction = ? WHERE channel_id = ?').run(group.group_id, direction, channelId);
 				
-					// Send a temporary notification (ephemeral so it doesn't clutter the channel)
-					await interaction.followUp({ content: '⚠️ **Link Overwritten:** This channel was already linked. Settings have been updated. Triggering sync/update...', ephemeral: true });
+				try {
+					// 1. Permissions and Group Checks
+					const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
+					const canManageWebhooks = botPermissions.has(PermissionFlagsBits.ManageWebhooks);
+					const canManageRoles = interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles); 
+				
+					if (!canManageWebhooks) {
+						const errorEmbed = new EmbedBuilder().setColor('#ED4245').setTitle('Permission Error').setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`).addFields({ name: 'How to Fix', value: 'An admin needs to ensure my role ("RelayBot") has the "Manage Webhooks" permission enabled here.' });
+						return interaction.editReply({ embeds: [errorEmbed] });
+					}
+					
+					const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+					if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.` });
 
-					// **Issue:** If the user changed the group, the old auto-role setting is lost.
-					// We accept this for the minimal fix. We assume the user wants the new settings.
 
-				} else {
-					// Normal first-time link. Create the webhook.
-					const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
-					webhookUrl = webhook.url;
+					// 2. Overwrite/Re-link Logic (Handle existing link)
+					const existingLink = db.prepare('SELECT group_id, webhook_url, allow_auto_role_creation FROM linked_channels WHERE channel_id = ?').get(channelId);
 
-					// Get auto-role setting from the server (assuming simple logic for now)
-					const channelSettings = db.prepare('SELECT allow_auto_role_creation FROM linked_channels WHERE guild_id = ? LIMIT 1').get(guildId);
-					const allowAutoRole = channelSettings ? channelSettings.allow_auto_role_creation : 0; // Default to 0 (false)
+					let webhookUrl;
+					let allowAutoRole = 0;
 
-					// CRUCIAL: Insert the NEW link record
-					db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction, allow_auto_role_creation) VALUES (?, ?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhookUrl, direction, allowAutoRole);
+					if (existingLink) {
+						// [OVERWRITE] Reuse existing webhook and grab the old auto-role setting.
+						webhookUrl = existingLink.webhook_url;
+						allowAutoRole = existingLink.allow_auto_role_creation;
+						
+						db.prepare('UPDATE linked_channels SET group_id = ?, direction = ? WHERE channel_id = ?').run(group.group_id, direction, channelId);
+
+						await interaction.editReply({ content: `⚠️ **Link Overwritten:** Settings updated. Checking for role sync...` });
+					} else {
+						// [NEW LINK] Create new webhook and insert the link.
+						const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
+						webhookUrl = webhook.url;
+						
+						db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction, allow_auto_role_creation) VALUES (?, ?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhookUrl, direction, allowAutoRole);
+
+						await interaction.editReply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**. Checking for role sync...` });
+					}
+
+					// 3. Role Syncing and Final Status Logic
+					let syncReport = '';
+					let syncMessage = null; 
+					
+					if (allowAutoRole) {
+						// Send the 'Attempting to sync' message and CAPTURE its reference
+						syncMessage = await interaction.followUp({ content: '🔄 Role Sync: Attempting to sync roles...', ephemeral: true });
+
+						if (!canManageRoles) {
+							syncReport = '\n⚠️ **Sync Skipped:** Missing `Manage Roles` permission. Auto-syncing failed.';
+						} else {
+							const masterRoleNames = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ?').all(group.group_id).map(r => r.role_name);
+							
+							if (masterRoleNames.length > 0) {
+								// Execution of sync logic
+								await interaction.guild.roles.fetch();
+								const serverRoles = interaction.guild.roles.cache;
+
+								let linkedCount = 0;
+								let createdCount = 0;
+
+								for (const commonName of masterRoleNames) {
+									const existingMapping = db.prepare('SELECT 1 FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?').get(group.group_id, guildId, commonName);
+									if (existingMapping) continue;
+
+									const existingRole = serverRoles.find(r => r.name === commonName);
+									
+									if (existingRole) {
+										db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, guildId, commonName, existingRole.id);
+										linkedCount++;
+									} else {
+										try {
+											const newRole = await interaction.guild.roles.create({
+												name: commonName,
+												mentionable: false, 
+												reason: `Auto-creating role for RelayBot group: ${groupName}`
+											});
+											db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, guildId, commonName, newRole.id);
+											createdCount++;
+										} catch (roleError) {
+											console.error(`[AUTO-ROLE] Failed to create role "${commonName}":`, roleError);
+										}
+									}
+								}
+								syncReport = `\n✅ **Role Sync Complete:** Linked **${linkedCount}** existing roles and created **${createdCount}** new roles.`;
+							} else {
+								syncReport = '\nℹ️ **Role Sync Info:** No mapped roles found in the group to sync.';
+							}
+						}
+						
+						// Edit the 'Attempting to sync' message with the final result
+						await syncMessage.edit({ content: syncMessage.content + syncReport });
+					}
+
+				} catch (error) {
+					// This is the CRUCIAL CATCH for link_channel
+					console.error('Error in /relay link_channel:', error);
+					
+					// If a webhook was created but the DB insert failed, try to delete the webhook.
+					if (webhookUrl) {
+						try {
+							const webhookId = webhookUrl.match(/\/webhooks\/(\d+)\//)[1];
+							const webhookClient = new WebhookClient({ id: webhookId, token: webhookUrl.split('/').pop() });
+							await webhookClient.delete('Cleanup due to failed link command.');
+						} catch (e) {
+							console.error('Failed to clean up webhook after link_channel error:', e.message);
+						}
+					}
+					
+					await interaction.editReply({ content: '❌ A fatal error occurred during the link process. Please check the logs.' });
 				}
-
-                // --- Auto-Role Syncing Logic ---
-                const channelSettings = db.prepare('SELECT allow_auto_role_creation FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (channelSettings && channelSettings.allow_auto_role_creation) {
-                    if (!canManageRoles) {
-                        syncReport = '\n⚠️ **Warning:** Auto-role sync skipped. I am missing the `Manage Roles` permission in this server.';
-                    } else {
-                        await interaction.followUp({ content: 'Attempting to sync roles...', ephemeral: true });
-
-                        const masterRoleNames = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ?').all(group.group_id).map(r => r.role_name);
-                        
-                        if (masterRoleNames.length > 0) {
-                            await interaction.guild.roles.fetch();
-                            const serverRoles = interaction.guild.roles.cache;
-
-                            let linkedCount = 0;
-                            let createdCount = 0;
-
-                            for (const commonName of masterRoleNames) {
-                                const existingMapping = db.prepare('SELECT 1 FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?').get(group.group_id, guildId, commonName);
-                                if (existingMapping) continue;
-
-                                const existingRole = serverRoles.find(r => r.name === commonName);
-                                
-                                if (existingRole) {
-                                    // Auto-Link: Role exists, save the mapping
-                                    db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, guildId, commonName, existingRole.id);
-                                    linkedCount++;
-                                } else {
-                                    // Auto-Create: Role does not exist, so create it
-                                    try {
-                                        const newRole = await interaction.guild.roles.create({
-                                            name: commonName,
-                                            mentionable: false, // Safer default
-                                            reason: `Auto-creating role for RelayBot group: ${groupName}`
-                                        });
-                                        db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, guildId, commonName, newRole.id);
-                                        createdCount++;
-                                    } catch (roleError) {
-                                        console.error(`[AUTO-ROLE] Failed to create role "${commonName}" in server "${interaction.guild.name}":`, roleError);
-                                    }
-                                }
-                            }
-                            syncReport = `\n🔄 **Role Sync Complete:** Successfully linked **${linkedCount}** existing roles and created **${createdCount}** new roles.`;
-                        } else {
-                            syncReport = '\nℹ️ **Role Sync Info:** No mapped roles found in the group to sync.';
-                        }
-                    }
-                }
-
-                await interaction.editReply({ content: `✅ This channel has been successfully linked/updated to the global "**${groupName}**" group with direction set to **${direction}**.${syncReport}` });
-
-            } else if (subcommand === 'unlink_channel') {
+				// --- CORRECTED link_channel BLOCK END ---
+			} else if (subcommand === 'unlink_channel') {
                 await interaction.deferReply({ ephemeral: true });
                 const link = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
                 if (!link) {
