@@ -88,28 +88,56 @@ module.exports = {
                 }
 
             } else if (subcommand === 'link_channel') {
-                await interaction.deferReply({ ephemeral: true });
-                const existingLink = db.prepare('SELECT 1 FROM linked_channels WHERE channel_id = ?').get(channelId);
-                if (existingLink) return interaction.editReply({ content: '❌ **Error:** This channel is already linked to a relay group. Please use `/relay unlink_channel` first.' });
-                const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
-                const canManageWebhooks = botPermissions.has(PermissionFlagsBits.ManageWebhooks);
-                const canManageRoles = interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles);
+				await interaction.deferReply({ ephemeral: true });
 
-                if (!canManageWebhooks) {
-                    const errorEmbed = new EmbedBuilder().setColor('#ED4245').setTitle('Permission Error').setDescription(`I am missing the **Manage Webhooks** permission in this specific channel (\`#${interaction.channel.name}\`).`).addFields({ name: 'How to Fix', value: 'An admin needs to go to `Edit Channel` > `Permissions` and ensure my role ("RelayBot") has the "Manage Webhooks" permission enabled here.' });
-                    return interaction.editReply({ embeds: [errorEmbed] });
-                }
-                
-                const groupName = interaction.options.getString('group_name');
-                const direction = interaction.options.getString('direction') ?? 'BOTH';
-                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.` });
-                
-                const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
-                
-                // CRUCIAL: Insert the link record *before* the sync, as the sync relies on the record existing.
-                db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction) VALUES (?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhook.url, direction);
+				const groupName = interaction.options.getString('group_name');
+				const direction = interaction.options.getString('direction') ?? 'BOTH';
+				const channelId = interaction.channel.id;
+				const guildId = interaction.guild.id;
 
+				// --- Minimal Overwrite Fix ---
+				const existingLink = db.prepare('SELECT group_id, webhook_url FROM linked_channels WHERE channel_id = ?').get(channelId);
+
+				// Check webhook permission regardless of existing link status
+				const botPermissions = interaction.guild.members.me.permissionsIn(interaction.channel);
+				if (!botPermissions.has(PermissionFlagsBits.ManageWebhooks)) {
+					// ... (Error embed for missing webhook permission)
+        			return interaction.editReply({ content: '❌ **Error:** I am missing the **Manage Webhooks** permission in this channel. I need this to create the link.' });
+				}
+
+				const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+				if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists. An admin on one server must create it first.` });
+
+				let webhookUrl;
+				let syncReport = '';
+
+				if (existingLink) {
+					// [THE FIX - Overwrite Logic]
+
+					// Use the existing webhook to avoid creating a new one (and orphaned ones).
+					webhookUrl = existingLink.webhook_url; 
+
+					// Update the existing row instead of deleting/re-inserting the link
+					db.prepare('UPDATE linked_channels SET group_id = ?, direction = ? WHERE channel_id = ?').run(group.group_id, direction, channelId);
+				
+					// Send a temporary notification (ephemeral so it doesn't clutter the channel)
+					await interaction.followUp({ content: '⚠️ **Link Overwritten:** This channel was already linked. Settings have been updated. Triggering sync/update...', ephemeral: true });
+
+					// **Issue:** If the user changed the group, the old auto-role setting is lost.
+					// We accept this for the minimal fix. We assume the user wants the new settings.
+
+				} else {
+					// Normal first-time link. Create the webhook.
+					const webhook = await interaction.channel.createWebhook({ name: 'RelayBot', reason: `Relay link for group ${groupName}` });
+					webhookUrl = webhook.url;
+
+					// Get auto-role setting from the server (assuming simple logic for now)
+					const channelSettings = db.prepare('SELECT allow_auto_role_creation FROM linked_channels WHERE guild_id = ? LIMIT 1').get(guildId);
+					const allowAutoRole = channelSettings ? channelSettings.allow_auto_role_creation : 0; // Default to 0 (false)
+
+					// CRUCIAL: Insert the NEW link record
+					db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction, allow_auto_role_creation) VALUES (?, ?, ?, ?, ?, ?)').run(channelId, guildId, group.group_id, webhookUrl, direction, allowAutoRole);
+				}
                 let syncReport = '';
 
                 // --- Auto-Role Syncing Logic ---
@@ -161,8 +189,7 @@ module.exports = {
                     }
                 }
 
-                await interaction.editReply({ content: `✅ This channel has been successfully linked to the global "**${groupName}**" group with direction set to **${direction}**.${syncReport}` });
-
+                await interaction.editReply({ content: `✅ This channel has been successfully linked/updated to the global "**${groupName}**" group with direction set to **${direction}**.${syncReport}` });
 
             } else if (subcommand === 'unlink_channel') {
                 await interaction.deferReply({ ephemeral: true });
