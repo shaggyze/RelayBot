@@ -21,6 +21,8 @@ module.exports = {
             PermissionsBitField.Flags.ManageMessages,
             PermissionsBitField.Flags.ReadMessageHistory,
             PermissionsBitField.Flags.ManageRoles,
+			PermissionsBitField.Flags.EmbedLinks,
+			PermissionsBitField.Flags.AttachFiles,
         ]);
 
         // Generate the invite link
@@ -32,7 +34,7 @@ module.exports = {
             .setDescription('Click the button below to invite the bot. The required permissions are already configured in the link for all features to work correctly.')
             .addFields({
                 name: 'Required Permissions',
-                value: '• View Channels\n• Manage Webhooks\n• Manage Messages\n• Manage Roles\n• Send Messages & Read History'
+                value: '• View Channels, Send Messages & Read History\n• Manage Webhooks & Manage Messages\n• Manage Roles, Embed Links & Attach Files\n• '
             });
 
         const row = new ActionRowBuilder().addComponents(

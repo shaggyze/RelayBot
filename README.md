@@ -17,9 +17,11 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 - **Directional Relays:** Configure channels to be Send-Only, Receive-Only, or Both Ways, perfect for announcements or log channels.
 - **Full Message Syncing:** Messages, edits, deletes, replies, and attachments are all synced across relayed channels.
 - **Dynamic Role Mapping:** Mention a role in one server, and RelayBot will intelligently ping the correctly mapped role in all other linked servers.
-- **Auto-Role Creation:** If a mapped role doesn't exist on a target server, the bot will automatically create it for you.
+- **Automatic Role Syncing:** When linking a channel, the bot can automatically create any missing mapped roles and link existing ones by name, ensuring role pings always work (feature is opt-in).
 - **Granular Deletion Toggles:** Separately control if deleting original messages deletes copies, and if deleting copies deletes the original.
-- **Server Context:** Relayed messages clearly show the sender's name and their original server (e.g., `ShaggyZE (Server A)`).
+- **Group Moderation:** Group owners can block abusive users or entire servers from being relayed, giving you full control over your shared space.
+- **Customizable Branding:** Set a custom brand/tag for your server's relayed messages (e.g., `ShaggyZE [S1]`).
+- **Public Statistics:** View activity and engagement stats for any relay group.
 - **Easy Setup & Management:** All configuration is done through user-friendly `/` slash commands.
 - **Scalable & Secure:** Built with a robust database backend to ensure every server's configuration is separate and secure.
 
@@ -52,13 +54,19 @@ The bot uses **global groups**. One server creates the group, and others link to
     - `/relay create_group name: my-super-unique-alliance`
 
 2.  **On ALL Servers - Link Your Channels:**
-    Admins on all participating servers can now link their channels to the *same* global group by name. You can specify a message direction, which is great for announcement channels!
+    Admins on all participating servers can now link their channels to the *same* global group by name. You can specify a message direction, which is great for announcement or log channels!
     - `/relay link_channel group_name: my-super-unique-alliance direction: One Way (Send messages FROM this channel only)`
 
-3.  **Map Roles (Optional):**
-    To sync role pings, map your server's roles to a shared "common name" within that group.
-    - On Server A: `/relay map_role group_name: my-super-unique-alliance common_name: Team Leaders role: @Leaders`
-    - On Server B: `/relay map_role group_name: my-super-unique-alliance common_name: Team Leaders role: @Squad-Leads`
+3.  **Map Roles: (Optional)**
+    To sync role pings, map your server's roles to a shared "common name" within that group. This should be done on all servers that want to participate in role pings.
+    - On Server A: `/relay map_role group_name: my-super-unique-alliance common_name: K30-31 role: @Kingdom-30-31`
+    - On Server B: `/relay map_role group_name: my-super-unique-alliance common_name: K30-31 role: @K30-31`
+
+4.  **Enable Auto-Role Syncing (Optional, Recommended):**
+    For the easiest role management, you can have the bot automatically create and link roles for you.
+    - First, enable the feature on your channel: `/relay toggle_auto_role`
+    - Then, run the link command. The bot will now sync all mapped roles from the group to your server, creating new ones if they don't exist and linking existing ones by name.
+    - **Already in a group?** No problem. Just run `/relay toggle_auto_role` to enable the feature, then run `/relay link_channel` again on your already-linked channel to trigger the sync.
 
 ### All Commands
 
@@ -69,9 +77,11 @@ The bot uses **global groups**. One server creates the group, and others link to
 - `/relay delete_group`: Deletes a global group (can only be run by the creating server).
 - `/relay kick_server`: Forcibly remove a server from a group you own.
 - `/relay list_servers`: See all servers currently in a group.
+- `/relay block`: Blocks a user or server from being relayed in a group you own.
+- `/relay unblock`: Unblocks a user or server from a group you own.
 
 **Channel Management:**
-- `/relay link_channel`: Links the current channel to a global group (with an optional direction).
+- `/relay link_channel`: Links the current channel to a global group. If auto-role is enabled, this also syncs roles.
 - `/relay unlink_channel`: Unlinks the current channel from its group.
 
 **Role Mapping:**
@@ -81,11 +91,14 @@ The bot uses **global groups**. One server creates the group, and others link to
 
 **Settings:**
 - `/relay set_direction`: Sets the direction of a channel from a group you own.
+- `/relay set_brand`: Sets a custom server name/tag for messages from this channel.
 - `/relay set_delete_delay`: Sets how long until relayed messages are auto-deleted (OFF by default).
 - `/relay toggle_forward_delete`: Toggles if deleting an original message also deletes its copies (ON by default).
 - `/relay toggle_reverse_delete`: Toggles if deleting a relayed copy also deletes the original message (OFF by default).
+- `/relay toggle_auto_role`: Enables/disables automatic role creation and linking for this channel.
 
 **Utility:**
+- `/relay stats`: Shows public activity statistics for a group.
 - `/invite`: Get a link to invite the bot to another server.
 - `/version`: Check the bot's current version.
 - `/vote`: Get links to vote for and support the bot.
@@ -132,7 +145,7 @@ npm install
 - Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 - Click "New Application" and give it a name.
 - Go to the "Bot" tab and click "Add Bot".
-- **Crucially**, under the bot's username, enable all three **Privileged Gateway Intents** (Presence, Server Members, and Message Content).
+- **Crucially**, under the bot's username, enable **Privileged Gateway Intents** (Server Members and Message Content).
 - Click "Reset Token" to reveal your bot's token. **Keep this secret!**
 - On the "General Information" page, copy the **Application ID**.
 
@@ -168,7 +181,7 @@ After deploying your bot, it is running but hasn't joined any servers yet. Use t
 
 1.  Go to the **Discord Developer Portal -> [Your App] -> OAuth2 -> URL Generator**.
 2.  In "Scopes", check **`bot`** and **`applications.commands`**.
-3.  In "Bot Permissions", check: `Manage Roles`, `Manage Webhooks`, `Manage Messages`, `Read Message History`, `Send Messages`, and `View Channel`.
+3.  In "Bot Permissions", check: `View Channel`, `Send Messages`, `Read Message History`, `Manage Webhooks`, `Manage Messages`, `Manage Roles`, `Embed Links` and `Attach Files`.
 4.  Copy the generated URL and use it to invite the bot.
 
 Once the bot is in one server, you can simply use the `/invite` command to get a clean invite link for other servers.
