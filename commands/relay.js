@@ -380,7 +380,6 @@ module.exports = {
                 let type = null;
                 if (/^\d{17,19}$/.test(targetId)) {
                     // It's a valid ID format. We'll assume GUILD if it's in the bot's cache, otherwise USER.
-                    // This is a heuristic but covers most cases without expensive lookups.
                     if (interaction.client.guilds.cache.has(targetId)) {
                         type = 'GUILD';
                     } else {
@@ -407,10 +406,6 @@ module.exports = {
                         await interaction.editReply({ content: `⚠️ That ID was not found in the blocklist.` });
                     }
                 }
-                const newValue = !channelLink.allow_auto_role_creation;
-                db.prepare('UPDATE linked_channels SET allow_auto_role_creation = ? WHERE channel_id = ?').run(newValue ? 1 : 0, channelId);
-                const status = newValue ? 'ENABLED' : 'DISABLED';
-                await interaction.reply({ content: `✅ Auto-role syncing for this channel is now **${status}**.\n*Run \`/relay link_channel\` again to trigger a manual sync.*`, ephemeral: true });
 
 			} else if (subcommand === 'toggle_auto_role') {
 				// [THE FIX] Check the setting on ANY channel first.
