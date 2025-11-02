@@ -102,10 +102,26 @@ module.exports = {
 
                 for (const group of allGroups) {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
-                    // [THE FIX] Get owner guild name and ID for display
-                    const ownerInfo = ownerGuild 
-                        ? ` (${ownerGuild.name} ID: \`${ownerGuild.id}\`)` 
-                        : ' (Unknown Server)';
+                    
+                    // [THE FIX] Fetch owner info dynamically
+                    let ownerInfo = '';
+                    if (ownerGuild) {
+                        try {
+                            // Fetch the owner user object
+                            const ownerUser = await ownerGuild.fetchOwner();
+                            if (ownerUser) {
+                                ownerInfo = ` (Owner: ${ownerUser.tag} ID: \`${ownerUser.id}\`)`;
+                            } else {
+                                ownerInfo = ` (Owner: Unknown - Guild ID: \`${group.owner_guild_id}\`)`;
+                            }
+                        } catch (e) {
+                            console.warn(`[OWNER-INFO] Could not fetch owner for guild ${ownerGuild.name} (${group.owner_guild_id}): ${e.message}`);
+                            ownerInfo = ` (Owner: Unknown - Guild ID: \`${group.owner_guild_id}\`)`;
+                        }
+                    } else {
+                        // Server not found in cache (bot might have left or been kicked)
+                        ownerInfo = ` (Owner: Unknown Server ID: \`${group.owner_guild_id}\`)`;
+                    }
                     
                     const todaysStats = todaysStatsMap.get(group.group_id) || { count: 0, paused: false };
                     const isPaused = todaysStats.paused;
