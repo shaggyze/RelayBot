@@ -516,18 +516,17 @@ module.exports = {
     // [THE FIX] ADD THE AUTOCOMPLETE HANDLER FUNCTION HERE
     async autocomplete(interaction) {
         const focusedOption = interaction.options.getFocused(true);
-        const subcommand = interaction.options.getSubcommand(); // Get the subcommand name
+        const subcommand = interaction.options.getSubcommand();
+        const isBotOwner = interaction.user.id === BOT_OWNER_ID; 
+        const choices = [];
 
-        // Check if the current subcommand is 'list_servers'
-        // AND if the focused option is 'group_name'
-        // AND if the user is the bot owner.
-        if (subcommand === 'list_servers' && focusedOption.name === 'group_name' && interaction.user.id === BOT_OWNER_ID) {
-            const choices = [];
-            // Query the database for all existing group names that match the user's input
+        // Autocomplete for /relay list_servers group_name (Bot Owner Only)
+        if (subcommand === 'list_servers' && focusedOption.name === 'group_name' && isBotOwner) {
+            // [THE FIX] Modify the query to handle empty focusedOption.value
+            const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
             const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25')
-                .all(`%${focusedOption.value}%`);
+                .all(searchTerm);
             
-            // Format the results for Discord's autocomplete
             groups.forEach(group => {
                 choices.push({
                     name: group.group_name,
@@ -535,14 +534,17 @@ module.exports = {
                 });
             });
             await interaction.respond(choices);
-        } else if (subcommand === 'map_role' && focusedOption.name === 'common_name') {
-			const groupName = interaction.options.getString('group_name');
+        } 
+        // Autocomplete for /relay map_role common_name (Public)
+        else if (subcommand === 'map_role' && focusedOption.name === 'common_name') {
+            const groupName = interaction.options.getString('group_name');
             const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-            const choices = []; // Reset choices for this specific autocomplete
-
+            
             if (group) {
+                // [THE FIX] Modify the query to handle empty focusedOption.value
+                const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
                 const aliases = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ? AND role_name LIKE ? LIMIT 25')
-                    .all(group.group_id, `%${focusedOption.value}%`);
+                    .all(group.group_id, searchTerm);
                 aliases.forEach(alias => {
                     choices.push({ name: alias.role_name, value: alias.role_name });
                 });
@@ -551,7 +553,6 @@ module.exports = {
             }
             await interaction.respond(choices);
         }
-        // Important: If not a bot owner, or not the specific option, the autocomplete function
-        // will implicitly return (or return an empty array if choices were cleared), meaning no suggestions.
+        // ... (other autocomplete handlers if any)
     },
 };

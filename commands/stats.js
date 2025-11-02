@@ -155,12 +155,15 @@ module.exports = {
     // [THE FIX] Autocomplete for group_name - restricted to bot owner
     async autocomplete(interaction) {
         const focusedOption = interaction.options.getFocused(true);
-        const isBotOwner = interaction.user.id === BOT_OWNER_ID; // Check if the user is the bot owner
+        const isBotOwner = interaction.user.id === BOT_OWNER_ID; 
         const choices = [];
 
-        if (isBotOwner && focusedOption.name === 'group_name') {
+        // Autocomplete for /stats group_name - restricted to bot owner
+        if (interaction.commandName === 'stats' && focusedOption.name === 'group_name' && isBotOwner) {
+            // [THE FIX] Modify the query to handle empty focusedOption.value
+            const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
             const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25')
-                .all(`%${focusedOption.value}%`);
+                .all(searchTerm);
             
             groups.forEach(group => {
                 choices.push({
@@ -169,9 +172,6 @@ module.exports = {
                 });
             });
         }
-        // If not bot owner, or not the 'group_name' option, or no input, 'choices' will be empty,
-        // resulting in no suggestions for non-owners.
-
         await interaction.respond(choices);
     },
 };
