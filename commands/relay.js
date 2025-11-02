@@ -16,8 +16,18 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('kick_server').setDescription('Forcibly removes a server from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own').setRequired(true)).addStringOption(option => option.setName('server_id').setDescription('The ID of the server to kick').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('link_channel').setDescription('Links this channel to a global relay group.').addStringOption(option => option.setName('group_name').setDescription('The name of the global group to link to').setRequired(true)).addStringOption(option => option.setName('direction').setDescription('Set the message direction for this channel (default: Both Ways).').setRequired(false).addChoices({ name: 'Both Ways (Send & Receive)', value: 'BOTH' }, { name: 'One Way (Send messages FROM this channel only)', value: 'SEND_ONLY' }, { name: 'Reverse (Receive messages IN this channel only)', value: 'RECEIVE_ONLY' })))
         .addSubcommand(subcommand => subcommand.setName('unlink_channel').setDescription('Unlinks the current channel from its relay group.'))
-        .addSubcommand(subcommand => subcommand.setName('list_servers').setDescription('Lists all servers and their linked channels for a global group.').addStringOption(option => option.setName('group_name').setDescription('The name of the group to list servers for').setRequired(true)))
-        .addSubcommand(subcommand => 
+        .addSubcommand(subcommand => subcommand.setName('unlink_channel').setDescription('Unlinks the current channel from its relay group.'))
+        
+        // --- MODIFY THIS SUBCOMMAND ---
+        .addSubcommand(subcommand => subcommand.setName('list_servers')
+            .setDescription('Lists all servers and their linked channels for a global group.')
+            .addStringOption(option => 
+                option.setName('group_name')
+                    .setDescription('The name of the group to list servers for.') // Updated description
+                    .setRequired(true) // Still required for this command's default public use
+                    // [THE FIX] Enable auto-complete for this option
+                    .setAutocomplete(true))) 
+		.addSubcommand(subcommand => 
             subcommand.setName('map_role')
                 .setDescription('Maps a server role to a common name (alias) for relaying.')
                 .addStringOption(option => option.setName('group_name').setDescription('The global group this mapping applies to').setRequired(true))
@@ -502,42 +512,46 @@ module.exports = {
            }
         }
     },
-
-    // --- AUTOCOMPLETE HANDLER ---
+    
+    // [THE FIX] ADD THE AUTOCOMPLETE HANDLER FUNCTION HERE
     async autocomplete(interaction) {
         const focusedOption = interaction.options.getFocused(true);
-        const subcommand = interaction.options.getSubcommand();
-        const choices = [];
+        const subcommand = interaction.options.getSubcommand(); // Get the subcommand name
 
-        if (subcommand === 'map_role' && focusedOption.name === 'common_name') {
-            const groupName = interaction.options.getString('group_name');
+        // Check if the current subcommand is 'list_servers'
+        // AND if the focused option is 'group_name'
+        // AND if the user is the bot owner.
+        if (subcommand === 'list_servers' && focusedOption.name === 'group_name' && interaction.user.id === BOT_OWNER_ID) {
+            const choices = [];
+            // Query the database for all existing group names that match the user's input
+            const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25')
+                .all(`%${focusedOption.value}%`);
             
-            // 1. Get the group_id
+            // Format the results for Discord's autocomplete
+            groups.forEach(group => {
+                choices.push({
+                    name: group.group_name,
+                    value: group.group_name,
+                });
+            });
+            await interaction.respond(choices);
+        } else if (subcommand === 'map_role' && focusedOption.name === 'common_name') {
+			const groupName = interaction.options.getString('group_name');
             const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
-            
+            const choices = []; // Reset choices for this specific autocomplete
+
             if (group) {
-                // 2. Query the database for all existing unique role_names in this group
-                // Note: The query uses a LIKE operator to filter results as the user types (focusedOption.value).
                 const aliases = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ? AND role_name LIKE ? LIMIT 25')
                     .all(group.group_id, `%${focusedOption.value}%`);
-                
-                // 3. Format the results for Discord
                 aliases.forEach(alias => {
-                    choices.push({
-                        name: alias.role_name,
-                        value: alias.role_name,
-                    });
+                    choices.push({ name: alias.role_name, value: alias.role_name });
                 });
+            } else if (focusedOption.value.length > 0) {
+                 choices.push({ name: `No group '${groupName}' found.`, value: focusedOption.value });
             }
-            // 4. Fallback if no group is selected, but the user is typing
-            else if (!group && focusedOption.value.length > 0) {
-                 choices.push({
-                    name: `No group '${groupName}' found.`,
-                    value: focusedOption.value,
-                });
-            }
-
             await interaction.respond(choices);
         }
+        // Important: If not a bot owner, or not the specific option, the autocomplete function
+        // will implicitly return (or return an empty array if choices were cleared), meaning no suggestions.
     },
 };
