@@ -16,8 +16,6 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('kick_server').setDescription('Forcibly removes a server from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own').setRequired(true)).addStringOption(option => option.setName('server_id').setDescription('The ID of the server to kick').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('link_channel').setDescription('Links this channel to a global relay group.').addStringOption(option => option.setName('group_name').setDescription('The name of the global group to link to').setRequired(true)).addStringOption(option => option.setName('direction').setDescription('Set the message direction for this channel (default: Both Ways).').setRequired(false).addChoices({ name: 'Both Ways (Send & Receive)', value: 'BOTH' }, { name: 'One Way (Send messages FROM this channel only)', value: 'SEND_ONLY' }, { name: 'Reverse (Receive messages IN this channel only)', value: 'RECEIVE_ONLY' })))
         .addSubcommand(subcommand => subcommand.setName('unlink_channel').setDescription('Unlinks the current channel from its relay group.'))
-        .addSubcommand(subcommand => subcommand.setName('unlink_channel').setDescription('Unlinks the current channel from its relay group.'))
-        
         // --- MODIFY THIS SUBCOMMAND ---
         .addSubcommand(subcommand => subcommand.setName('list_servers')
             .setDescription('Lists all servers and their linked channels for a global group.')
