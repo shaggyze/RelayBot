@@ -90,7 +90,7 @@ module.exports = {
                     }
                 }
 
-                const today = getRateLimitDayString();
+                const today = getRateLimitDayString(); // Assuming getRateLimitDayString is in scope
                 const todaysStatsRaw = db.prepare('SELECT group_id, character_count, warning_sent_at FROM group_stats WHERE day = ?').all(today);
                 const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, { count: stat.character_count, paused: !!stat.warning_sent_at }]));
 
@@ -103,24 +103,24 @@ module.exports = {
                 for (const group of allGroups) {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
                     
-                    // [THE FIX] Fetch owner info dynamically
-                    let ownerInfo = '';
+                    // [THE FIX] Get owner user info for THIS group's owner guild
+                    let ownerUserDetails = '';
                     if (ownerGuild) {
                         try {
-                            // Fetch the owner user object
-                            const ownerUser = await ownerGuild.fetchOwner();
-                            if (ownerUser) {
-                                ownerInfo = ` (Owner: ${ownerUser.tag} ID: \`${ownerUser.id}\`)`;
+                            const ownerUser = await ownerGuild.fetchOwner(); // Fetch the owner's user object
+                            if (ownerUser && ownerUser.user) {
+                                ownerUserDetails = ` (Owner: ${ownerUser.user.tag} ID: \`${ownerUser.user.id}\`)`;
+                            } else if (ownerUser) {
+                                ownerUserDetails = ` (Owner: ${ownerUser.tag} ID: \`${ownerUser.id}\`)`;
                             } else {
-                                ownerInfo = ` (Owner: Unknown - Guild ID: \`${group.owner_guild_id}\`)`;
+                                ownerUserDetails = ` (Owner: Unknown User ID: \`${ownerGuild.ownerId}\`)`;
                             }
                         } catch (e) {
-                            console.warn(`[OWNER-INFO] Could not fetch owner for guild ${ownerGuild.name} (${group.owner_guild_id}): ${e.message}`);
-                            ownerInfo = ` (Owner: Unknown - Guild ID: \`${group.owner_guild_id}\`)`;
+                            console.warn(`[LIST_GROUPS] Could not fetch owner for group owner guild ${ownerGuild.name} (${group.owner_guild_id}): ${e.message}`);
+                            ownerUserDetails = ` (Owner: Unknown User ID: \`${ownerGuild.ownerId}\`)`;
                         }
                     } else {
-                        // Server not found in cache (bot might have left or been kicked)
-                        ownerInfo = ` (Owner: Unknown Server ID: \`${group.owner_guild_id}\`)`;
+                        ownerUserDetails = ` (Owner: Unknown Server ID: \`${group.owner_guild_id}\`)`;
                     }
                     
                     const todaysStats = todaysStatsMap.get(group.group_id) || { count: 0, paused: false };
@@ -146,8 +146,8 @@ module.exports = {
                     const todaysChars = todaysStats.count;
                     const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
                     
-                    // [THE FIX] Append owner info to the group line
-                    const groupLine = `${statusEmoji} ${star} **${group.group_name}** (Owner: ${ownerGuild ? ownerGuild.name : 'Unknown Server'}${ownerInfo})\n`;
+                    // [THE FIX] Append owner user details to the group line
+                    const groupLine = `${statusEmoji} ${star} **${group.group_name}** (Server: ${ownerGuild ? ownerGuild.name : 'Unknown'} ID: \`${group.owner_guild_id}\`)${ownerUserDetails}\n`;
                     const statsLine = `  └─ *Stats: ${todaysChars.toLocaleString()} today / ${totalChars.toLocaleString()} total / ${dailyAvg.toLocaleString()} avg.*\n`;
                     const fullLine = groupLine + statsLine;
 

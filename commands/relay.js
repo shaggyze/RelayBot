@@ -248,26 +248,6 @@ module.exports = {
                 
                 const guildsToChannels = new Map();
                 
-                // Fetch owner server details ONCE for the group's owner
-                // This is important for correctly identifying the owner's server line.
-                const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
-                let ownerInfoString = '';
-                if (ownerGuild) {
-                    try {
-                        const ownerUser = await ownerGuild.fetchOwner(); // Fetch the owner's user object
-                        if (ownerUser) {
-                            ownerInfoString = ` (Owner: ${ownerUser.tag} ID: \`${ownerUser.id}\`)`;
-                        } else {
-                            ownerInfoString = ` (Owner: Unknown - Guild Owner ID: \`${group.owner_guild_id}\`)`;
-                        }
-                    } catch (e) {
-                        console.warn(`[LIST_SERVERS] Could not fetch owner for group owner guild ${ownerGuild.name} (${group.owner_guild_id}): ${e.message}`);
-                        ownerInfoString = ` (Owner: Unknown - Guild Owner ID: \`${group.owner_guild_id}\`)`;
-                    }
-                } else {
-                    ownerInfoString = ` (Owner: Unknown Server ID: \`${group.owner_guild_id}\`)`;
-                }
-
                 // Populate the map with all linked guilds and their channels
                 for (const link of allLinks) {
                     if (!guildsToChannels.has(link.guild_id)) {
@@ -280,18 +260,31 @@ module.exports = {
                 for (const [guildId, channelInfos] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
                     let guildDisplay = '';
+                    let ownerDetails = ''; // To store the owner's name and ID
 
                     if (guild) {
+                        try {
+                            const ownerUser = await guild.fetchOwner(); // Fetch the owner for THIS guild
+                            if (ownerUser && ownerUser.user) { // Ensure ownerUser and its user property exist
+                                ownerDetails = ` (Owner: ${ownerUser.user.tag} ID: \`${ownerUser.user.id}\`)`;
+                            } else if (ownerUser) { // Fallback if ownerUser is fetched but user property is not there
+                                ownerDetails = ` (Owner: ${ownerUser.tag} ID: \`${ownerUser.id}\`)`; // Use tag if available
+                            } else {
+                                ownerDetails = ` (Owner: Unknown User ID: \`${guild.ownerId}\`)`;
+                            }
+                        } catch (e) {
+                            console.warn(`[LIST_SERVERS] Failed to fetch owner for guild ${guild.name} (${guildId}): ${e.message}`);
+                            ownerDetails = ` (Owner: Unknown User ID: \`${guild.ownerId}\`)`;
+                        }
+                        
                         const memberCount = guild.memberCount;
-                        // Fetch supporter count if needed (assuming isSupporter and getSupporterSet are available)
                         const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
                         
-                        // Append owner info ONLY if this is the group's owner server
-                        guildDisplay = `• **${guild.name}** (ID: \`${guildId}\`)${guildId === group.owner_guild_id ? ownerInfoString : ''}`;
+                        // Append owner info to every guild line where the bot is present.
+                        guildDisplay = `• **${guild.name}** (ID: \`${guildId}\`)${ownerDetails}`;
                     } else {
-                        // This case is for guilds the bot is no longer in but still has links for.
-                        // We can't get owner info reliably here, but we can show the group owner's info if it's *that* guild.
-                        guildDisplay = `• **Unknown Server** (ID: \`${guildId}\`)${group.owner_guild_id === guildId ? ownerInfoString : ''}`;
+                        // For inaccessible guilds (bot not in server), we can only display the stored owner ID.
+                        guildDisplay = `• **Unknown Server** (ID: \`${guildId}\`) (Owner: Unknown User ID: \`${guild.ownerId || 'N/A'}\`)`;
                     }
                     description += guildDisplay + '\n';
                     
@@ -307,7 +300,7 @@ module.exports = {
                 }
                 const listEmbed = new EmbedBuilder().setTitle(`Servers & Channels in Group "${groupName}"`).setColor('#5865F2').setDescription(description.trim());
                 await interaction.editReply({ embeds: [listEmbed] });
-            
+
             } else if (subcommand === 'map_role') {
                 const groupName = interaction.options.getString('group_name');
                 const commonName = interaction.options.getString('common_name');
