@@ -243,8 +243,18 @@ module.exports = {
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
                 if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
+
                 const allLinks = db.prepare('SELECT guild_id, channel_id, direction FROM linked_channels WHERE group_id = ?').all(group.group_id);
+                
                 const guildsToChannels = new Map();
+                
+                // Fetch owner server details ONCE
+                const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
+                const ownerInfoString = ownerGuild 
+                    ? ` (Owner: ${ownerGuild.name} ID: \`${ownerGuild.id}\`)` 
+                    : ` (Owner: Unknown Server ID: \`${group.owner_guild_id}\`)`;
+
+                // Ensure the owner's guild is processed first or handled correctly
                 if (!guildsToChannels.has(group.owner_guild_id)) {
                     guildsToChannels.set(group.owner_guild_id, []);
                 }
@@ -254,16 +264,21 @@ module.exports = {
                     }
                     guildsToChannels.get(link.guild_id).push({ id: link.channel_id, dir: link.direction });
                 }
+                
                 let description = '';
                 for (const [guildId, channelInfos] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
+                    let guildDisplay = '';
                     if (guild) {
                         const memberCount = guild.memberCount;
                         const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
-                        description += `• **${guild.name}** (ID: \`${guildId}\`) (${memberCount} Members / ${supporterCount} Supporters)\n`;
+                        // Append owner info ONLY if this is the owner's guild
+                        guildDisplay = `• **${guild.name}** (ID: \`${guildId}\`)${guildId === group.owner_guild_id ? ownerInfoString : ''}`;
                     } else {
-                        description += `• **Unknown Server** (ID: \`${guildId}\`)\n`;
+                        guildDisplay = `• **Unknown Server** (ID: \`${guildId}\`)${group.owner_guild_id === guildId ? ownerInfoString : ''}`;
                     }
+                    description += guildDisplay + '\n';
+                    
                     if (channelInfos.length > 0) {
                         for (const info of channelInfos) {
                             const channel = interaction.client.channels.cache.get(info.id);
@@ -379,7 +394,6 @@ module.exports = {
                 // Determine if the ID is a user or a guild
                 let type = null;
                 if (/^\d{17,19}$/.test(targetId)) {
-                    // It's a valid ID format. We'll assume GUILD if it's in the bot's cache, otherwise USER.
                     if (interaction.client.guilds.cache.has(targetId)) {
                         type = 'GUILD';
                     } else {
@@ -388,6 +402,49 @@ module.exports = {
                 } else {
                     return interaction.editReply({ content: '❌ **Error:** The provided ID is not a valid User or Server ID.' });
                 }
+
+                // --- [NEW HIERARCHY PERMISSION CHECKS] ---
+                if (type === 'USER') {
+                    // Rule: Cannot target yourself.
+                    if (targetId === interaction.user.id) {
+                        return interaction.editReply({ content: `❌ You cannot ${subcommand} yourself.` });
+                    }
+
+                    // Fetch the target member to check their permissions.
+                    let targetMember;
+                    try {
+                        targetMember = await interaction.guild.members.fetch(targetId);
+                    } catch {
+                        // If the user isn't in the server, they can't be an admin or owner.
+                        // It's safe to proceed with the block/unblock action.
+                    }
+
+                    if (targetMember) {
+                        const executorIsBotOwner = interaction.user.id === BOT_OWNER_ID;
+                        const executorIsServerOwner = interaction.user.id === interaction.guild.ownerId;
+                        
+                        const targetIsBotOwner = targetId === BOT_OWNER_ID; // <-- New Check
+                        const targetIsServerOwner = targetId === interaction.guild.ownerId;
+                        const targetIsAdmin = targetMember.permissions.has(PermissionFlagsBits.Administrator);
+
+                        // [NEW RULE] The Bot Owner cannot be blocked by anyone.
+                        if (targetIsBotOwner) {
+                            return interaction.editReply({ content: `❌ The bot owner cannot be blocked.` });
+                        }
+
+                        // Rule: The Server Owner cannot be blocked by anyone.
+                        if (targetIsServerOwner) {
+                            return interaction.editReply({ content: `❌ The server owner cannot be blocked.` });
+                        }
+
+                        // Rule: An admin (who is NOT the server owner) cannot block another admin.
+                        // This check is bypassed if the person running the command is the bot owner.
+                        if (targetIsAdmin && !executorIsServerOwner && !executorIsBotOwner) {
+                            return interaction.editReply({ content: `❌ As an administrator, you cannot block another administrator. Only the server owner or bot owner can perform this action.` });
+                        }
+                    }
+                }
+                // --- End of new permission checks ---
     
                 if (subcommand === 'block') {
                     try {

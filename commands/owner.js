@@ -102,7 +102,10 @@ module.exports = {
 
                 for (const group of allGroups) {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
-                    const ownerInfo = ownerGuild ? ownerGuild.name : `Unknown Server`;
+                    // [THE FIX] Get owner guild name and ID for display
+                    const ownerInfo = ownerGuild 
+                        ? ` (${ownerGuild.name} ID: \`${ownerGuild.id}\`)` 
+                        : ' (Unknown Server)';
                     
                     const todaysStats = todaysStatsMap.get(group.group_id) || { count: 0, paused: false };
                     const isPaused = todaysStats.paused;
@@ -127,7 +130,8 @@ module.exports = {
                     const todaysChars = todaysStats.count;
                     const dailyAvg = (group.active_days > 0) ? Math.round(totalChars / group.active_days) : 0;
                     
-                    const groupLine = `${statusEmoji} ${star} **${group.group_name}** (Owner: ${ownerInfo})\n`;
+                    // [THE FIX] Append owner info to the group line
+                    const groupLine = `${statusEmoji} ${star} **${group.group_name}** (Owner: ${ownerGuild ? ownerGuild.name : 'Unknown Server'}${ownerInfo})\n`;
                     const statsLine = `  └─ *Stats: ${todaysChars.toLocaleString()} today / ${totalChars.toLocaleString()} total / ${dailyAvg.toLocaleString()} avg.*\n`;
                     const fullLine = groupLine + statsLine;
 
@@ -152,9 +156,7 @@ module.exports = {
                 for (let i = 1; i < embeds.length; i++) {
                     await interaction.followUp({ embeds: [embeds[i]], ephemeral: true });
                 }
-            } 
-            
-            else if (subcommand === 'delete_group') {
+            } else if (subcommand === 'delete_group') {
                 await interaction.deferReply({ ephemeral: true });
                 const groupName = interaction.options.getString('name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
@@ -504,6 +506,90 @@ module.exports = {
                     }
 
                     return interaction.editReply({ content: '', embeds: [embed] });
+                }
+            } else if (subcommand === 'rename_group') {
+                await interaction.deferReply({ ephemeral: true });
+
+                const currentName = interaction.options.getString('current_name');
+                const newName = interaction.options.getString('new_name');
+                const reason = interaction.options.getString('reason'); // Get the optional reason
+
+                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(currentName);
+                if (!group) {
+                    return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${currentName}".` });
+                }
+
+                // --- [THE FIX] Find all unique server owners in the group BEFORE renaming ---
+                const linkedGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(row => row.guild_id);
+                
+                // Use a Map to store owner IDs and their associated guilds to prevent duplicate DMs
+                const ownerNotificationMap = new Map();
+
+                for (const guildId of linkedGuildIds) {
+                    try {
+                        const guild = await interaction.client.guilds.fetch(guildId);
+                        const owner = await guild.fetchOwner();
+                        
+                        if (!ownerNotificationMap.has(owner.id)) {
+                            ownerNotificationMap.set(owner.id, { ownerObject: owner, guilds: [] });
+                        }
+                        ownerNotificationMap.get(owner.id).guilds.push(guild.name);
+
+                    } catch (e) {
+                        console.error(`[RENAME-PREP] Could not fetch owner for server ${guildId}:`, e.message);
+                    }
+                }
+                
+                // Perform the update.
+                try {
+                    const result = db.prepare('UPDATE relay_groups SET group_name = ? WHERE group_id = ?').run(newName, group.group_id);
+                    
+                    if (result.changes > 0) {
+                        let notifiedOwners = 0;
+                        let failedNotifications = 0;
+
+                        // Create the base notification message.
+                        let notificationMessage = `📢 **RelayBot Notification**\n\nThe relay group "**${currentName}**" has been renamed to "**${newName}**" by the Bot Owner.`;
+                        
+                        // Add the reason if one was provided.
+                        if (reason) {
+                            notificationMessage += `\n\n**Reason:** *${reason}*`;
+                        }
+                        
+                        notificationMessage += `\n\nYour relays will continue to function, but you must use the new name for any future commands. Please save this new name for your records.`;
+
+                        // --- [THE FIX] Iterate over the unique owners ---
+                        for (const [ownerId, data] of ownerNotificationMap.entries()) {
+                            // Don't notify the bot owner running the command.
+                            if (ownerId === interaction.user.id) continue;
+
+                            try {
+                                // Add a list of their affected servers to the message for clarity
+                                const finalMessage = `${notificationMessage}\n\n*This change affects your server(s): ${data.guilds.join(', ')}*`;
+                                await data.ownerObject.send(finalMessage);
+
+                                notifiedOwners++;
+                            } catch (e) {
+                                console.error(`[RENAME-NOTIFY] Failed to DM owner ${ownerId}:`, e.message);
+                                failedNotifications++;
+                            }
+                        }
+
+                        let notificationReport = '';
+                        if (notifiedOwners > 0 || failedNotifications > 0) {
+                            notificationReport = `\n\n📢 DMs were sent to **${notifiedOwners}** unique server owners. **${failedNotifications}** owners could not be reached.`;
+                        }
+
+                        await interaction.editReply({ content: `✅ **Success!** Group "**${currentName}**" has been renamed to "**${newName}**".${notificationReport}` });
+                    } else {
+                        await interaction.editReply({ content: 'An unexpected error occurred. The group name was not changed.' });
+                    }
+                } catch (error) {
+                    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+                        await interaction.editReply({ content: `❌ **Error:** A global group named "**${newName}**" already exists. Please choose a different name.` });
+                    } else {
+                        throw error;
+                    }
                 }
             }
         } catch (error) {
