@@ -4,6 +4,7 @@ const { exec } = require('child_process');
 const db = require('../db/database.js');
 const { getRateLimitDayString } = require('../utils/time.js');
 const { isSupporter } = require('../utils/supporterManager.js');
+const { uploadDatabase } = require('../utils/backupManager.js');
 
 const BOT_OWNER_ID = '182938628643749888';
 
@@ -19,7 +20,14 @@ module.exports = {
             subcommand
                 .setName('delete_group')
                 .setDescription('[DANGER] Forcibly deletes a global group and makes the bot leave the owner\'s server.')
-                .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true)))
+                .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true).setAutocomplete(true))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('rename_group')
+                .setDescription('[DANGER] Forcibly renames a global group.')
+                .addStringOption(option => option.setName('current_name').setDescription('The current name of the group you want to rename.').setRequired(true).setAutocomplete(true))
+                .addStringOption(option => option.setName('new_name').setDescription('The new, unique name for the group.').setRequired(true))
+                .addStringOption(option => option.setName('reason').setDescription('An optional reason for the name change to send to server owners.').setRequired(false))
         .addSubcommand(subcommand =>
             subcommand
 				.setName('prune_db')
@@ -394,50 +402,23 @@ module.exports = {
             } else if (subcommand === 'upload_db') {
                 await interaction.deferReply({ ephemeral: true });
 
-                const uploadSecret = process.env.UPLOAD_SECRET_KEY;
-                const clientId = process.env.CLIENT_ID; // Get the Client ID from environment
-                if (!uploadSecret || !clientId) {
-                    return interaction.editReply({ content: '❌ **Configuration Error:** `UPLOAD_SECRET_KEY` and `CLIENT_ID` must be set.' });
+                try {
+                    const response = await uploadDatabase();
+                    
+                    const successEmbed = new EmbedBuilder()
+                        .setTitle('Database Upload Successful')
+                        .setColor('#5865F2')
+                        .setDescription(`The database has been uploaded and is ready for download.\n\n**[Click Here to Download](${response.url})**`)
+                        .addFields({ name: 'Filename', value: `\`${response.filename}\`` })
+                        .setFooter({ text: 'Do not share this link.' })
+                        .setTimestamp();
+                    
+                    await interaction.editReply({ embeds: [successEmbed] });
+
+                } catch (error) {
+                    await interaction.editReply({ content: `❌ **Upload Failed:** ${error.message}` });
                 }
 
-                // [THE FIX - PART 1] Create the dynamic filename.
-                const timestamp = new Date().toISOString().replace(/:/g, '-').slice(0, 19);
-                const dynamicFilename = `database_${clientId}_${timestamp}.db`;
-
-                const dbPath = '/data/database.db';
-                const uploadUrl = 'https://shaggyze.website/railway-upload.php';
-
-                // Add the filename to the curl command as a new form field.
-                const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" -F "filename=${dynamicFilename}" ${uploadUrl}`;
-
-                exec(command, (error, stdout, stderr) => {
-                    const stdoutStr = stdout.toString();
-                    const stderrStr = stderr.toString();
-                    if (error) {
-                        console.error('[DB-UPLOAD] Exec error:', error);
-                        return interaction.editReply({ content: `An error occurred while executing curl: \`\`\`${stderrStr}\`\`\`` });
-                    }
-
-                    try {
-                        const response = JSON.parse(stdoutStr);
-                        // [THE FIX - PART 2] The PHP script now returns a direct URL.
-                        if (response.success && response.url) {
-                            const successEmbed = new EmbedBuilder()
-                                .setTitle('Database Upload Successful')
-                                .setColor('#5865F2')
-                                .setDescription(`The database has been uploaded and is ready for download.\n\n**[Click Here to Download](${response.url})**`)
-                                .addFields({ name: 'Filename', value: `\`${response.filename}\`` })
-                                .setFooter({ text: 'Do not share this link.' })
-                                .setTimestamp();
-                            
-                            interaction.editReply({ embeds: [successEmbed] });
-                        } else {
-                            interaction.editReply({ content: `The upload script returned an error: \`\`\`${response.message || stdoutStr}\`\`\`` });
-                        }
-                    } catch (parseError) {
-                        interaction.editReply({ content: `Failed to parse the server response. Raw output: \`\`\`${stdoutStr}\`\`\`` });
-                    }
-                });
             } else if (subcommand === 'leave_inactive') {
                 await interaction.deferReply({ ephemeral: true });
 
@@ -621,5 +602,31 @@ module.exports = {
                 console.error('Failed to send error response to user:', e);
             }
         }
+    },
+
+    // --- [NEW AUTOCOMPLETE FUNCTION] ---
+    async autocomplete(interaction) {
+        // Since all owner commands are restricted, we don't need to re-check the user's ID here.
+        const focusedOption = interaction.options.getFocused(true);
+        const subcommand = interaction.options.getSubcommand();
+        const choices = [];
+
+        // Check for the subcommands and options that need autocomplete
+        if ((subcommand === 'delete_group' && focusedOption.name === 'name') ||
+            (subcommand === 'rename_group' && focusedOption.name === 'current_name')) {
+            
+            const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
+            const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25')
+                .all(searchTerm);
+            
+            groups.forEach(group => {
+                choices.push({
+                    name: group.group_name,
+                    value: group.group_name,
+                });
+            });
+        }
+        
+        await interaction.respond(choices);
     },
 };

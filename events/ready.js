@@ -4,6 +4,7 @@ const db = require('../db/database.js');
 const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
+const { uploadDatabase } = require('../utils/backupManager.js');
 
 async function primeMemberCache(client) {
     console.log('[Cache] Starting background member cache priming for all guilds...');
@@ -165,8 +166,38 @@ module.exports = {
                 }).catch(() => {});
             }
         }, 15 * 60 * 1000);
-        
+
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+        const scheduleWeeklyBackup = () => {
+            const now = new Date();
+            // Check if today is Sunday (getDay() returns 0 for Sunday)
+            if (now.getDay() === 0) {
+                console.log('[SCHEDULE] Today is Sunday. Attempting automated database backup...');
+                uploadDatabase().catch(error => {
+                    console.error('[SCHEDULE] Automated backup failed:', error.message);
+                });
+            } else {
+                console.log(`[SCHEDULE] Today is not Sunday (Day: ${now.getDay()}). Skipping weekly backup.`);
+            }
+        };
+
+        // Run the check once a day. We'll use a timeout to schedule the first check,
+        // then an interval for subsequent checks.
+        const now = new Date();
+        const nextCheck = new Date();
+        nextCheck.setUTCHours(2, 0, 0, 0); // Set to run at 2:00 AM UTC every day
+        if (now > nextCheck) {
+            nextCheck.setDate(nextCheck.getDate() + 1);
+        }
+        const initialDelay = nextCheck.getTime() - now.getTime();
+
+        console.log(`[SCHEDULE] Next weekly backup check scheduled in ${(initialDelay / 1000 / 60 / 60).toFixed(2)} hours.`);
+
+        setTimeout(() => {
+            scheduleWeeklyBackup(); // Run the first check
+            setInterval(scheduleWeeklyBackup, twentyFourHoursInMs); // Then check again every 24 hours
+        }, initialDelay);
+
         setTimeout(() => {
             // This function will run for the first time after 24 hours.
             const runPruning = () => {

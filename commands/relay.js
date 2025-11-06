@@ -23,7 +23,6 @@ module.exports = {
                 option.setName('group_name')
                     .setDescription('The name of the group to list servers for.') // Updated description
                     .setRequired(true) // Still required for this command's default public use
-                    // [THE FIX] Enable auto-complete for this option
                     .setAutocomplete(true))) 
 		.addSubcommand(subcommand => 
             subcommand.setName('map_role')
@@ -37,7 +36,7 @@ module.exports = {
                         .setAutocomplete(true)) 
                 .addRoleOption(option => option.setName('role').setDescription('The actual role to map').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('list_mappings').setDescription('Lists all configured role mappings for a group on this server.').addStringOption(option => option.setName('group_name').setDescription('The name of the group to list mappings for').setRequired(true)))
-        .addSubcommand(subcommand => subcommand.setName('unmap_role').setDescription('Removes a role mapping from a group.').addStringOption(option => option.setName('group_name').setDescription('The global group to unmap from').setRequired(true)).addStringOption(option => option.setName('common_name').setDescription('The common name of the role to unmap').setRequired(true)))
+        .addSubcommand(subcommand => subcommand.setName('unmap_role').setDescription('Removes a role mapping from a group.').addStringOption(option => option.setName('group_name').setDescription('The global group to unmap from').setRequired(true)).addStringOption(option => option.setName('common_name').setDescription('The common name of the role to unmap').setRequired(true))).setAutocomplete(true)))
         .addSubcommand(subcommand => subcommand.setName('set_direction').setDescription('Sets the direction of a channel from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the relay group.').setRequired(true)).addStringOption(option => option.setName('channel_id').setDescription('The ID of the channel you want to modify.').setRequired(true)).addStringOption(option => option.setName('direction').setDescription('The new relay direction for this channel.').setRequired(true).addChoices({ name: 'Both (Send & Receive)', value: 'BOTH' }, { name: 'Send Only', value: 'SEND_ONLY' }, { name: 'Receive Only', value: 'RECEIVE_ONLY' })))
 		.addSubcommand(subcommand => subcommand.setName('set_delete_delay').setDescription('Sets the auto-delete delay for messages in this channel (0 to disable).').addIntegerOption(option => option.setName('hours').setDescription('How many hours before messages are deleted').setRequired(true).setMinValue(0).setMaxValue(720)))
         .addSubcommand(subcommand => subcommand.setName('toggle_forward_delete').setDescription('Toggle if deleting an original message also deletes its copies (ON by default).'))
@@ -306,6 +305,9 @@ module.exports = {
                         description += `  └─ *(No channels linked from this server)*\n`;
                     }
                 }
+				if (description.trim() === '') {
+                    description = 'No servers are currently linked to this group.';
+                }
                 const listEmbed = new EmbedBuilder().setTitle(`Servers & Channels in Group "${groupName}"`).setColor('#5865F2').setDescription(description.trim());
                 await interaction.editReply({ embeds: [listEmbed] });
 
@@ -550,6 +552,20 @@ module.exports = {
                  choices.push({ name: `No group '${groupName}' found.`, value: focusedOption.value });
             }
             await interaction.respond(choices);
+		// Autocomplete for /relay unmap_role common_name (Public)
+        } else if (subcommand === 'unmap_role' && focusedOption.name === 'common_name') {
+            const groupName = interaction.options.getString('group_name');
+            const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+            
+            if (group) {
+                // Find all aliases mapped on THIS server for THIS group
+                const aliases = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name LIKE ? LIMIT 25')
+                    .all(group.group_id, interaction.guild.id, `%${focusedOption.value}%`);
+                
+                aliases.forEach(alias => {
+                    choices.push({ name: alias.role_name, value: alias.role_name });
+                });
+            }
         }
         // ... (other autocomplete handlers if any)
     },

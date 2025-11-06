@@ -1,6 +1,6 @@
 # Terms & Conditions for RelayBot
 
-These Terms & Conditions ("Terms") govern your use of RelayBot ("the bot," "we," "us," "our") on the Discord platform. By adding RelayBot to your Discord server or by using its commands, you agree to be bound by these Terms and the RelayBot [Privacy Policy](https://github.com/shaggyze/RelayBot/blob/main/privacy-policy.md).
+These Terms & Conditions ("Terms") govern your use of RelayBot ("the bot," "we," "us," "our") on the Discord platform. By adding RelayBot to your Discord server or by using its commands, you agree to be bound by these Terms and the RelayBot [Privacy Policy](https://shaggyze.website/RelayBot/privacy-policy.php).
 
 If you do not agree to these terms, you must not use the bot and should remove it from your Discord server immediately.
 
@@ -43,7 +43,7 @@ RelayBot is free and open-source software released under the **ISC License**. Th
 
 The MIT License grants you broad permissions, including but not limited to, the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software. A condition of this license is that the original copyright notice and the full text of the MIT License must be included in all copies or substantial portions of the software.
 
-For the full terms, please refer to the [ISC License](https://github.com/shaggyze/RelayBot/blob/main/LICENSE) on the official GitHub repository.
+For the full terms, please refer to the [ISC License](https://shaggyze.website/RelayBot/license.php) or on the official GitHub repository.
 
 #### 7. Termination
 

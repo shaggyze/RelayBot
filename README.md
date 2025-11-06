@@ -225,9 +225,9 @@ Your use of RelayBot is subject to the following legal documents. By adding the 
 <details>
 <summary>documents</summary>
 
-*   **[Terms & Conditions](https://github.com/shaggyze/RelayBot/blob/main/terms-conditions.md)**: Outlines the rules for using the bot, acceptable use, and our disclaimers.
-*   **[Privacy Policy](https://github.com/shaggyze/RelayBot/blob/main/privacy-policy.md)**: Details what data the bot collects, how it is used, and your rights regarding that data.
-*   **[ISC License](https://github.com/shaggyze/RelayBot/blob/main/LICENSE)**: RelayBot is open-source software. This license grants you broad permissions to use, modify, and distribute the software.
+*   **[Terms & Conditions](https://shaggyze.website/RelayBot/terms-conditions.php)**: Outlines the rules for using the bot, acceptable use, and our disclaimers.
+*   **[Privacy Policy](https://shaggyze.website/RelayBot/privacy-policy.php)**: Details what data the bot collects, how it is used, and your rights regarding that data.
+*   **[ISC License](https://shaggyze.website/RelayBot/license.php)**: RelayBot is open-source software. This license grants you broad permissions to use, modify, and distribute the software.
 
 The bot is provided "as is", without warranty of any kind.
 </details>
