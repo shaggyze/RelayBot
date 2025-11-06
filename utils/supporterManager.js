@@ -2,9 +2,9 @@
 const https = require('https');
 const { version } = require('../package.json');
 
-const WEBHOOK_URL = 'https://shaggyze.website/webhook.php';
-const PATRON_LIST_URL = 'https://shaggyze.website/patrons.txt';
-const VOTER_LIST_URL = 'https://shaggyze.website/voters.txt';
+const WEBHOOK_URL = 'https://shaggyze.website/RelayBot/webhook.php';
+const PATRON_LIST_URL = 'https://shaggyze.website/RelayBot/patrons.txt';
+const VOTER_LIST_URL = 'https://shaggyze.website/RelayBot/voters.txt';
 
 let supporterIds = new Set();
 
