@@ -20,14 +20,14 @@ module.exports = {
             subcommand
                 .setName('delete_group')
                 .setDescription('[DANGER] Forcibly deletes a global group and makes the bot leave the owner\'s server.')
-                .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true).setAutocomplete(true))
+                .addStringOption(option => option.setName('name').setDescription('The exact name of the group to delete.').setRequired(true).setAutocomplete(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('rename_group')
                 .setDescription('[DANGER] Forcibly renames a global group.')
                 .addStringOption(option => option.setName('current_name').setDescription('The current name of the group you want to rename.').setRequired(true).setAutocomplete(true))
                 .addStringOption(option => option.setName('new_name').setDescription('The new, unique name for the group.').setRequired(true))
-                .addStringOption(option => option.setName('reason').setDescription('An optional reason for the name change to send to server owners.').setRequired(false))
+                .addStringOption(option => option.setName('reason').setDescription('An optional reason for the name change to send to server owners.').setRequired(false)))
         .addSubcommand(subcommand =>
             subcommand
 				.setName('prune_db')
