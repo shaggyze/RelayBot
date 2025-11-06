@@ -18,7 +18,7 @@ async function uploadDatabase() {
 
         // This path must match your production environment
         const dbPath = '/data/database.db';
-        const uploadUrl = 'https://shaggyze.website/railway-upload.php';
+        const uploadUrl = 'https://shaggyze.website/RelayBot/railway-upload.php';
 
         const command = `curl -s -X POST -H "X-Upload-Secret: ${uploadSecret}" -F "file=@${dbPath}" -F "filename=${dynamicFilename}" ${uploadUrl}`;
 
