@@ -30,8 +30,11 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 There are two ways to use RelayBot: inviting an official public bot (if available) or self-hosting your own private instance for full control.
 
 ### Public-Hosting
+(public bot on railway.app)
 
-- [top.gg](https://top.gg/bot/1397069734469435446) (public bot on railway.app)
+- [Discord Install](https://discord.com/oauth2/authorize?client_id=1397069734469435446)
+
+- [top.gg](https://top.gg/bot/1397069734469435446) 
 
 ### Self-Hosting (Recommended)
 

@@ -151,7 +151,7 @@ const migrations = [
 			CREATE INDEX IF NOT EXISTS idx_relayed_messages_original_id ON relayed_messages(original_message_id);
 		`
 	},
-	// [NEW] Version 10: Adds blacklisting, branding and role-syncing.
+	// Version 10: Adds blacklisting, branding and role-syncing.
 	{
 	    version: 10,
     up: `
@@ -167,8 +167,20 @@ const migrations = [
         ALTER TABLE linked_channels ADD COLUMN brand_name TEXT;
 
         ALTER TABLE linked_channels ADD COLUMN allow_auto_role_creation BOOLEAN DEFAULT 0 NOT NULL;
-    `
-	}
+        `
+	},
+    // [NEW] Version 11: Table to cache the status of guild-based app subscriptions.
+    {
+        version: 11,
+    up: `
+        CREATE TABLE guild_subscriptions (
+            guild_id TEXT PRIMARY KEY,
+            is_active BOOLEAN NOT NULL DEFAULT 0,
+            expires_at INTEGER, -- Timestamp for when the subscription ends (can be null)
+            updated_at INTEGER NOT NULL -- Timestamp for when we last synced this record
+        );
+        `
+    }
 ];
 
 // --- MIGRATION LOGIC ---
@@ -190,6 +202,7 @@ if (currentVersion < latestVersion) {
             CREATE TABLE relayed_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, original_message_id TEXT NOT NULL, original_channel_id TEXT NOT NULL, relayed_message_id TEXT NOT NULL, relayed_channel_id TEXT NOT NULL, replied_to_id TEXT);
             CREATE TABLE group_stats (stat_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, day TEXT NOT NULL, character_count INTEGER NOT NULL DEFAULT 0, warning_sent_at INTEGER, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, day));
             CREATE TABLE group_blacklist (blacklist_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, blocked_id TEXT NOT NULL, type TEXT NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, blocked_id));
+            CREATE TABLE guild_subscriptions (guild_id TEXT PRIMARY KEY, is_active BOOLEAN NOT NULL DEFAULT 0, expires_at INTEGER, updated_at INTEGER NOT NULL);
             CREATE INDEX idx_relayed_messages_original_id ON relayed_messages(original_message_id);
             CREATE INDEX idx_group_stats_day ON group_stats(day);
         `;

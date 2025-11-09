@@ -5,6 +5,7 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
+const PREMIUM_SKU_ID = '1436488229455925299';
 
 async function primeMemberCache(client) {
     console.log('[Cache] Starting background member cache priming for all guilds...');
@@ -110,6 +111,30 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
+async function syncGuildSubscriptions(client) {
+    console.log('[Subscriptions] Starting sync of guild subscriptions...');
+    let activeSubs = 0;
+    for (const guild of client.guilds.cache.values()) {
+        try {
+            const entitlements = await client.application.entitlements.fetch({ guildId: guild.id });
+            const activeRelayBotSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive);
+
+            if (activeRelayBotSub) {
+                const expiresTimestamp = activeRelayBotSub.endsTimestamp;
+                db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)')
+                  .run(guild.id, expiresTimestamp, Date.now());
+                activeSubs++;
+            } else {
+                db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 0, NULL, ?)')
+                  .run(guild.id, Date.now());
+            }
+        } catch (error) {
+            console.warn(`[Subscriptions] Failed to fetch entitlements for guild ${guild.name} (${guild.id}): ${error.message}`);
+        }
+    }
+    console.log(`[Subscriptions] Sync complete. Found ${activeSubs} guilds with active subscriptions.`);
+}
+
 function scheduleNextNoonTask(client) {
     const now = new Date();
     const nextRun = new Date();
@@ -131,25 +156,51 @@ function scheduleNextNoonTask(client) {
     }, delay);
 }
 
+function runDbPruning() {
+    console.log('[DB-Prune] Starting daily database pruning task...');
+    try {
+        const pruneDays = parseInt(process.env.DB_PRUNE_DAYS, 10) || 7;
+        if (pruneDays <= 0) {
+            console.log('[DB-Prune] Pruning is disabled (DB_PRUNE_DAYS <= 0).');
+            return;
+        }
+
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - pruneDays);
+        const discordEpoch = 1420070400000n;
+        const cutoffTimestamp = BigInt(cutoffDate.getTime());
+        const timestampPart = cutoffTimestamp - discordEpoch;
+        const discordEpochCutoffBigInt = (timestampPart << 22n);
+        const cutoffIdString = discordEpochCutoffBigInt.toString();
+
+        console.log(`[DB-Prune] Pruning relayed_messages older than Snowflake ID: ${cutoffIdString}`);
+        const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
+        console.log(`[DB-Prune] Success! Pruned ${resultMessages.changes} old message links.`);
+    } catch (error) {
+        console.error('[DB-Prune] An error occurred during the daily pruning task:', error);
+    }
+}
 
 module.exports = {
     name: Events.ClientReady,
     once: true,
     async execute(client) {
         console.log(`Ready! Logged in as ${client.user.tag}`);
-        client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Playing });
+        client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Watching });
 
-        console.log('[Startup] Caching members for all guilds...');
+        // --- Non-blocking startup tasks (run in the background without await) ---
         primeMemberCache(client);
-        console.log('[Startup] Member cache priming complete.');
-
-        console.log('[Startup] Performing initial fetch of supporter list...');
         fetchSupporterIds();
-        console.log('[Startup] Initial supporter list loaded.');
+        syncGuildSubscriptions(client);
 
+        // --- Scheduled Tasks ---
         const oneHourInMs = 60 * 60 * 1000;
+        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+
+        // Hourly supporter fetch
         setInterval(fetchSupporterIds, oneHourInMs);
         
+        // Message cleanup (every 15 minutes)
         setInterval(() => {
             console.log('[Tasks] Running scheduled message cleanup...');
             const channelsToClean = db.prepare('SELECT channel_id, delete_delay_hours FROM linked_channels WHERE delete_delay_hours > 0').all();
@@ -167,84 +218,43 @@ module.exports = {
             }
         }, 15 * 60 * 1000);
 
-        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
-        const scheduleWeeklyBackup = () => {
+        // Daily Subscription Sync
+        setInterval(() => syncGuildSubscriptions(client), twentyFourHoursInMs);
+
+        // Daily Vote Reminder
+        scheduleNextNoonTask(client);
+
+        // --- Precisely Timed Daily Tasks (Pruning & Backups) ---
+        const scheduleDailyTasks = () => {
             const now = new Date();
-            // Check if today is Sunday (getDay() returns 0 for Sunday)
-            if (now.getDay() === 0) {
-                console.log('[SCHEDULE] Today is Sunday. Attempting automated database backup...');
-                uploadDatabase().catch(error => {
-                    console.error('[SCHEDULE] Automated backup failed:', error.message);
-                });
-            } else {
-                console.log(`[SCHEDULE] Today is not Sunday (Day: ${now.getDay()}). Skipping weekly backup.`);
+            const nextRun = new Date();
+            nextRun.setUTCHours(2, 0, 0, 0); // Set a specific time, e.g., 2:00 AM UTC
+            if (now > nextRun) {
+                nextRun.setDate(nextRun.getDate() + 1);
             }
+            const initialDelay = nextRun.getTime() - now.getTime();
+
+            console.log(`[Scheduler] Next daily backup & pruning check scheduled in ${(initialDelay / 1000 / 60 / 60).toFixed(2)} hours.`);
+
+            setTimeout(() => {
+                // Run tasks for the first time
+                runDbPruning();
+                if (new Date().getDay() === 0) { // Check if it's Sunday
+                    console.log('[SCHEDULE] Today is Sunday. Attempting automated database backup...');
+                    uploadDatabase().catch(error => console.error('[SCHEDULE] Automated backup failed:', error.message));
+                }
+
+                // Schedule them to run every 24 hours thereafter
+                setInterval(runDbPruning, twentyFourHoursInMs);
+                setInterval(() => {
+                    if (new Date().getDay() === 0) {
+                        console.log('[SCHEDULE] Today is Sunday. Attempting automated database backup...');
+                        uploadDatabase().catch(error => console.error('[SCHEDULE] Automated backup failed:', error.message));
+                    }
+                }, twentyFourHoursInMs);
+            }, initialDelay);
         };
 
-        // Run the check once a day. We'll use a timeout to schedule the first check,
-        // then an interval for subsequent checks.
-        const now = new Date();
-        const nextCheck = new Date();
-        nextCheck.setUTCHours(2, 0, 0, 0); // Set to run at 2:00 AM UTC every day
-        if (now > nextCheck) {
-            nextCheck.setDate(nextCheck.getDate() + 1);
-        }
-        const initialDelay = nextCheck.getTime() - now.getTime();
-
-        console.log(`[SCHEDULE] Next weekly backup check scheduled in ${(initialDelay / 1000 / 60 / 60).toFixed(2)} hours.`);
-
-        setTimeout(() => {
-            scheduleWeeklyBackup(); // Run the first check
-            setInterval(scheduleWeeklyBackup, twentyFourHoursInMs); // Then check again every 24 hours
-        }, initialDelay);
-
-        setTimeout(() => {
-            // This function will run for the first time after 24 hours.
-            const runPruning = () => {
-                console.log('[DB-Prune] Starting daily database pruning task...');
-                try {
-					const cutoffDate = new Date();
-					cutoffDate.setDate(cutoffDate.getDate() - 7); // Prune messages older than 7 days
-
-					// For group_stats, we use the date string directly.
-					const cutoffDayString = cutoffDate.toISOString().slice(0, 10); // 'YYYY-MM-DD'
-
-					// For relayed_messages, we need to compare original_message_id (TEXT Snowflake ID)
-					// with a cutoff ID derived from the same date.
-					// Discord Snowflakes are 64-bit integers. JavaScript Numbers can lose precision
-					// for values > Number.MAX_SAFE_INTEGER (2^53 - 1).
-					// Bitwise operations in JS are performed on 32-bit integers.
-					// We must use BigInt for accurate Snowflake calculations.
-
-					const discordEpoch = 1420070400000n; // Discord's epoch in BigInt
-					const cutoffTimestamp = BigInt(cutoffDate.getTime()); // Current date's timestamp in BigInt
-
-					// Calculate the Snowflake ID equivalent for the cutoff date.
-					// The formula is (timestamp - discordEpoch) << 22 (timestamp part is 42 bits, starts at bit 22)
-					const timestampPart = cutoffTimestamp - discordEpoch;
-					const discordEpochCutoffBigInt = (timestampPart << 22n); // Use BigInt for bit shift
-
-					// Convert the BigInt cutoff ID to a string for the SQL query.
-					const cutoffIdString = discordEpochCutoffBigInt.toString();
-
-					console.log(`[DB-Prune] Pruning relayed_messages older than Snowflake ID: ${cutoffIdString}`);
-					const resultMessages = db.prepare('DELETE FROM relayed_messages WHERE original_message_id < ?').run(cutoffIdString);
-
-					//console.log(`[DB-Prune] Pruning group_stats for days older than: ${cutoffDayString}`);
-					//const resultStats = db.prepare("DELETE FROM group_stats WHERE day < ?").run(cutoffDayString);
-
-					console.log(`[DB-Prune] Success! Pruned ${resultMessages.changes} old message links.`);
-					//console.log(`[DB-Prune] Success! Pruned ${resultStats.changes} old daily stats.`);
-                } catch (error) {
-                    console.error('[DB-Prune] An error occurred during the daily pruning task:', error);
-                }
-            };
-            
-            runPruning(); // Run it once now (after the initial timeout)
-            setInterval(runPruning, twentyFourHoursInMs); // Then schedule it for every 24 hours after that.
-
-        }, twentyFourHoursInMs); // The initial delay
-        
-        scheduleNextNoonTask(client);
+        scheduleDailyTasks();
     },
 };

@@ -72,29 +72,57 @@ module.exports = {
 
             const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
-            
+
+            // This is the main gate for the rate limit check.
             if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
-                if (!stats.warning_sent_at) {
-                    console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
-                    const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
-                    const now = new Date();
-                    const nextResetTime = new Date();
-                    nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
-                    if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
-                    const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
-                    const warningPayload = createVoteMessage();
-                    warningPayload.username = 'RelayBot';
-                    warningPayload.avatarURL = message.client.user.displayAvatarURL();
-                    warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
-                    for (const target of allTargetChannels) {
-                        try {
-                            const webhookClient = new WebhookClient({ url: target.webhook_url });
-                            await webhookClient.send(warningPayload);
-                        } catch {}
+                
+                // First, check for the premium subscription bypass.
+                const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ?').get(message.guild.id);
+                if (subscription && subscription.is_active) {
+                    // This guild has an active premium subscription.
+                    // By doing nothing here, the code will continue outside this 'if' block and relay the message.
+                    console.log(`[SUBSCRIPTION] Bypassing rate limit for guild ${message.guild.id} due to active subscription.`);
+                } else {
+                    // --- This is the "You ARE being rate-limited" block ---
+
+                    // Check if another message is already sending the warning to prevent a race condition.
+                    if (groupsBeingWarned.has(sourceChannelInfo.group_id)) {
+                        return; // Stop immediately.
                     }
-                    db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
+
+                    // Check if a warning needs to be sent for the first time today.
+                    if (!stats.warning_sent_at) {
+                        try {
+                            groupsBeingWarned.add(sourceChannelInfo.group_id);
+
+                            console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
+                            const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                            const now = new Date();
+                            const nextResetTime = new Date();
+                            nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
+                            if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
+                            const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
+                            const warningPayload = createVoteMessage();
+                            warningPayload.username = 'RelayBot';
+                            warningPayload.avatarURL = message.client.user.displayAvatarURL();
+                            warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
+                            for (const target of allTargetChannels) {
+                                try {
+                                    const webhookClient = new WebhookClient({ url: target.webhook_url });
+                                    await webhookClient.send(warningPayload);
+                                } catch {}
+                            }
+                            db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
+
+                        } finally {
+                            groupsBeingWarned.delete(sourceChannelInfo.group_id);
+                        }
+                    }
+
+                    // [THE FIX] CRITICAL: This return stops the message from being relayed,
+                    // regardless of whether a warning was just sent or had been sent previously.
+                    return; 
                 }
-                return;
             }
 
 			// --- Branding Logic (Used to construct 'username' and 'avatarURL') ---
