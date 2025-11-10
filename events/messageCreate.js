@@ -16,6 +16,7 @@ const getSupporterSet = () => new Set();
 const getRateLimitDayString = () => new Date().toISOString().slice(0, 10);
 const RESET_HOUR_UTC = 19;
 
+const groupsBeingWarned = new Set();
 
 async function checkGroupForSupporters(client, groupId) {
     const supporterIdList = getSupporterSet();
