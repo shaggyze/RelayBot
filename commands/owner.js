@@ -64,6 +64,15 @@ module.exports = {
                 .addBooleanOption(option =>
                     option.setName('dry_run')
                         .setDescription('If true, will only list servers to leave without actually leaving. (Default: True)')))
+        // --- [NEW SUBCOMMAND] ---
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('check_subscription')
+                .setDescription('Manually checks the subscription status for a specific server.')
+                .addStringOption(option =>
+                    option.setName('server_id')
+                        .setDescription('The ID of the server to check.')
+                        .setRequired(true)))
     ,
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
@@ -588,19 +597,69 @@ module.exports = {
                         throw error;
                     }
                 }
-            }
-        } catch (error) {
-            console.error(`Error in /owner ${subcommand}:`, error);
-            try {
-                const content = 'An unknown error occurred. The developer has been notified.';
-                if (interaction.deferred || interaction.replied) {
-                    await interaction.editReply({ content });
-                } else {
-                    await interaction.reply({ content, ephemeral: true });
+            // --- [NEW LOGIC BLOCK] ---
+            } else if (subcommand === 'check_subscription') {
+                await interaction.deferReply({ ephemeral: true });
+                const guildId = interaction.options.getString('server_id');
+
+                const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
+                if (!guild) {
+                    return interaction.editReply({ content: `❌ **Error:** I am not a member of the server with ID \`${guildId}\`.` });
                 }
-            } catch (e) {
-                console.error('Failed to send error response to user:', e);
+
+                try {
+                    // 1. Live API Check against Discord
+                    const entitlements = await interaction.client.application.entitlements.fetch({ guildId: guild.id });
+                    const activeSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive);
+                    
+                    // 2. Check Local Database Cache
+                    const dbSub = db.prepare('SELECT * FROM guild_subscriptions WHERE guild_id = ?').get(guild.id);
+
+                    // 3. Build the response embed
+                    const embed = new EmbedBuilder()
+                        .setTitle(`Subscription Status for ${guild.name}`)
+                        .setColor(activeSub ? '#23A559' : '#ED4245') // Green for active, Red for inactive
+                        .addFields(
+                            { name: 'Server ID', value: `\`${guild.id}\`` }
+                        );
+
+                    // --- API Status Section ---
+                    if (activeSub) {
+                        embed.addFields(
+                            { name: 'Live API Status', value: '✅ Active Subscription Found' },
+                            { name: 'SKU ID', value: `\`${activeSub.skuId}\``, inline: true },
+                            { name: 'Entitlement ID', value: `\`${activeSub.id}\``, inline: true },
+                            { name: 'Expires At', value: activeSub.endsTimestamp ? `<t:${Math.floor(activeSub.endsTimestamp / 1000)}:R>` : 'Never', inline: true }
+                        );
+                    } else {
+                        embed.addFields({ name: 'Live API Status', value: '❌ No active subscription found for the premium SKU.' });
+                    }
+
+                    // --- Database Cache Section ---
+                    if (dbSub) {
+                        embed.addFields(
+                            { name: 'Database Cache Status', value: dbSub.is_active ? '✅ Active' : '❌ Inactive' },
+                            { name: 'Last Synced', value: `<t:${Math.floor(dbSub.updated_at / 1000)}:R>`, inline: true }
+                        );
+                    } else {
+                        embed.addFields({ name: 'Database Cache Status', value: '🤔 No record found in the database.' });
+                    }
+
+                    await interaction.editReply({ embeds: [embed] });
+
+                } catch (error) {
+                    console.error(`[SUB-CHECK] Failed to fetch entitlements for guild ${guild.id}:`, error);
+                    await interaction.editReply({ content: `An error occurred while fetching entitlements for **${guild.name}**:\n\`\`\`${error.message}\`\`\`` });
+                }
             }
+
+        } catch (error) {
+           console.error(`Error in /owner ${subcommand}:`, error);
+           if (interaction.deferred || interaction.replied) {
+               await interaction.editReply({ content: 'An unknown error occurred while executing this command.' }).catch(() => {});
+           } else if (!interaction.replied) {
+               await interaction.reply({ content: 'An unknown error occurred while executing this command.', ephemeral: true }).catch(() => {});
+           }
         }
     },
 
