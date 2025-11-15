@@ -73,12 +73,12 @@ module.exports = {
 
             const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
-
+            const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ?').get(message.guild.id);
             // This is the main gate for the rate limit check.
             if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
                 
                 // First, check for the premium subscription bypass.
-                const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ?').get(message.guild.id);
+                
                 if (subscription && subscription.is_active) {
                     // This guild has an active premium subscription.
                     // By doing nothing here, the code will continue outside this 'if' block and relay the message.
@@ -143,7 +143,7 @@ module.exports = {
                 return;
             }
 
-            console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+            //console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
         
             // Flag to ensure full reply embed only appears once
             let isFirstTarget = true; 
@@ -167,7 +167,7 @@ module.exports = {
                 
                 try {
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                    console.log(`[RELAY][${executionId}] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
+                    //console.log(`[RELAY][${executionId}] Attempting to relay message ${message.id} to channel #${targetChannelName}`);
                     
                     // --- Reply Embed and Jump Link Logic ---
                     if (message.reference && message.reference.messageId) {
