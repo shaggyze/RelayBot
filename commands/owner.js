@@ -7,6 +7,7 @@ const { isSupporter } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
 
 const BOT_OWNER_ID = '182938628643749888';
+const PREMIUM_SKU_ID = '1436488229455925299';
 
 module.exports = {
     data: new SlashCommandBuilder()
