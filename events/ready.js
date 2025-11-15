@@ -222,7 +222,7 @@ module.exports = {
         setInterval(() => syncGuildSubscriptions(client), twentyFourHoursInMs);
 
         // Daily Vote Reminder
-        //scheduleNextNoonTask(client);
+        scheduleNextNoonTask(client);
 
         // --- Precisely Timed Daily Tasks (Pruning & Backups) ---
         const scheduleDailyTasks = () => {
@@ -255,6 +255,6 @@ module.exports = {
             }, initialDelay);
         };
 
-        //scheduleDailyTasks();
+        scheduleDailyTasks();
     },
 };
