@@ -47,7 +47,7 @@ module.exports = {
 console.log(`[${executionId}] null`);
             // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
             if (message.author.id === message.client.user.id || message.author.id === message.webhookId) return; 
-console.log(`[${executionId}] 0 ${message.webhookId}`);
+console.log(`[${executionId}] 0 ${message.client.user.id}`);
             // --- End of Simplified Guard ---
 
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
