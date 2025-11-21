@@ -124,12 +124,13 @@ async function syncGuildSubscriptions(client) {
                 db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)')
                   .run(guild.id, expiresTimestamp, Date.now());
                 activeSubs++;
+                console.log(`[Subscriptions] Found ${activeRelayBotSub} for guild #${activeSubs} ${guild.name} (${guild.id})`);
             } else {
                 db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 0, NULL, ?)')
                   .run(guild.id, Date.now());
             }
         } catch (error) {
-            console.warn(`[Subscriptions] Failed to fetch entitlements for guild ${guild.name} (${guild.id}): ${error.message}`);
+            console.warn(`[Subscriptions] Failed to fetch entitlements for guild #${activeSubs} ${guild.name} (${guild.id}): ${error.message}`);
         }
     }
     console.log(`[Subscriptions] Sync complete. Found ${activeSubs} guilds with active subscriptions.`);
