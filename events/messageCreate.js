@@ -40,12 +40,20 @@ module.exports = {
         const executionId = crypto.randomBytes(4).toString('hex');
 
         try {
-            // [CRITICAL FIX] IGNORE Webhooks and other bots to prevent relay cascade/loops
-            if (message.author.bot || !message.guild || message.webhookId) return;
+            // 1. Always ignore DMs.
+            if (!message.guild) return; 
+            
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
+            // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
+            if (message.author.id === message.client.user.id) return; 
+            
+            // --- End of Simplified Guard ---
 
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
             if (!sourceChannelInfo) return;
+
+            // 2. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
+            if (!sourceChannelInfo.process_bot_messages && (message.author.bot || message.webhookId)) return;
 
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);

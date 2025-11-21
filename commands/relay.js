@@ -45,6 +45,7 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('block').setDescription('Blocks a user or server from being relayed in a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own.').setRequired(true)).addStringOption(option => option.setName('target_id').setDescription('The User ID or Server ID to block.').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('unblock').setDescription('Unblocks a user or server from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own.').setRequired(true)).addStringOption(option => option.setName('target_id').setDescription('The User ID or Server ID to unblock.').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('toggle_auto_role').setDescription('Toggle auto-role creation/linking when linking this channel to a group.'))
+		.addSubcommand(subcommand => subcommand.setName('toggle_webhook_relay').setDescription('Toggles whether this channel relays messages sent by Webhooks or other bots (OFF by default).'))
 	,
     async execute(interaction) {
         if (!interaction.inGuild()) {
@@ -501,7 +502,21 @@ module.exports = {
 
 				const status = newValue ? 'ENABLED' : 'DISABLED';
 				await interaction.reply({ content: `✅ Auto-role syncing for **ALL** linked channels on this server is now **${status}**.\n*Run \`/relay link_channel\` again on any linked channel to trigger a manual sync.*`, ephemeral: true });
-			}
+			} else if (subcommand === 'toggle_webhook_relay') {
+                await interaction.deferReply({ ephemeral: true });
+
+                const channelLink = db.prepare('SELECT process_bot_messages FROM linked_channels WHERE channel_id = ?').get(channelId);
+                if (!channelLink) {
+                    return interaction.editReply({ content: 'This channel is not linked to any relay group.', ephemeral: true });
+                }
+
+                const newValue = !channelLink.process_bot_messages;
+                db.prepare('UPDATE linked_channels SET process_bot_messages = ? WHERE channel_id = ?').run(newValue ? 1 : 0, channelId);
+                const status = newValue ? 'ENABLED' : 'DISABLED';
+                
+                await interaction.editReply({ content: `✅ Webhook/Bot Message Processing for this channel is now **${status}**.` });
+
+            }
 		} catch (error) {
            // --- FINAL CATCH BLOCK ---
            console.error(`Error in /relay ${subcommand}:`, error);
