@@ -17,17 +17,6 @@ process.on('unhandledRejection', (reason, promise) => {
 
 console.log('[DEBUG] index.js starting...');
 
-// --- [DIAGNOSTIC STEP 1] Add detailed debug listeners ---
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildWebhooks,
-        GatewayIntentBits.GuildMembers
-    ],
-});
-
 // Log every debug message from discord.js
 client.on('debug', console.log);
 // Log any warnings
