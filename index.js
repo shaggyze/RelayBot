@@ -17,15 +17,6 @@ process.on('unhandledRejection', (reason, promise) => {
 
 console.log('[DEBUG] index.js starting...');
 
-// Log every debug message from discord.js
-client.on('debug', console.log);
-// Log any warnings
-client.on('warn', console.log);
-// Log any general errors
-client.on('error', console.error);
-// --- END DIAGNOSTIC STEP ---
-
-
 console.log('[DEBUG] Requiring database...');
 require('./db/database.js'); 
 console.log('[DEBUG] Database require() successful.');
@@ -50,6 +41,14 @@ const client = new Client({
         retries: 3,
     },
 });
+
+// Log every debug message from discord.js
+client.on('debug', console.log);
+// Log any warnings
+client.on('warn', console.log);
+// Log any general errors
+client.on('error', console.error);
+// --- END DIAGNOSTIC STEP ---
 
 try {
     console.log('[DEBUG] Loading commands...');
