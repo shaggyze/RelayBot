@@ -42,11 +42,11 @@ module.exports = {
         try {
             // 1. Always ignore DMs.
             if (!message.guild) return; 
-            console.log(`content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
+            console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 console.log(`[${executionId}] null`); 
             // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
-            if (message.author.id === message.client.user.id || message.webhookId) return; 
+            if (message.author.id === message.client.user.id || message.author.id === message.webhookId) return; 
 console.log(`[${executionId}] 0`);      
             // --- End of Simplified Guard ---
 
