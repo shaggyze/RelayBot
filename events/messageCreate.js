@@ -44,18 +44,19 @@ module.exports = {
             if (!message.guild) return; 
             console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
-console.log(`[${executionId}] null`); 
+console.log(`[${executionId}] null`);
             // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
             if (message.author.id === message.client.user.id || message.author.id === message.webhookId) return; 
-console.log(`[${executionId}] 0`);      
+console.log(`[${executionId}] 0 ${message.webhookId}`);
             // --- End of Simplified Guard ---
 
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
+console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             if (!sourceChannelInfo) return;
 
             // 2. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
-            if (!sourceChannelInfo.process_bot_messages && (message.author.bot || message.webhookId)) return;
-console.log(`[${executionId}] 1`);
+            if (!sourceChannelInfo.process_bot_messages & (message.author.bot || message.webhookId)) return;
+console.log(`[${executionId}] 1 ${sourceChannelInfo.process_bot_messages}`);
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
