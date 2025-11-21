@@ -46,7 +46,7 @@ module.exports = {
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 console.log(`[${executionId}] null`);
             // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
-            if (message.author.id === message.client.user.id || message.author.id === message.webhookId) return; 
+            if (message.author.id === message.webhookId) return; 
 console.log(`[${executionId}] 0 ${message.client.user.id}`);
             // --- End of Simplified Guard ---
 
