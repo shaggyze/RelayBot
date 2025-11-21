@@ -78,12 +78,12 @@ module.exports = {
             if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
                 
                 // First, check for the premium subscription bypass.
-                //const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ?').get(message.guild.id);
-                //if (subscription && subscription.is_active) {
+                const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ?').get(message.guild.id);
+                if (subscription && subscription.is_active) {
                     // This guild has an active premium subscription.
                     // By doing nothing here, the code will continue outside this 'if' block and relay the message.
                     //console.log(`[SUBSCRIPTION] Bypassing rate limit for guild ${message.guild.id} due to active subscription.`);
-                //} else {
+                } else {
                     // --- This is the "You ARE being rate-limited" block ---
 
                     // Check if another message is already sending the warning to prevent a race condition.
@@ -123,7 +123,7 @@ module.exports = {
                     // [THE FIX] CRITICAL: This return stops the message from being relayed,
                     // regardless of whether a warning was just sent or had been sent previously.
                     return; 
-                //}
+                }
             }
 
 			// --- Branding Logic (Used to construct 'username' and 'avatarURL') ---
