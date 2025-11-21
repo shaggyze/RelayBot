@@ -45,7 +45,7 @@ module.exports = {
             
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
             // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
-            if (message.author.id === message.client.user.id) return; 
+            if (message.author.id === message.client.user.id || message.webhookId) return; 
             
             // --- End of Simplified Guard ---
 
@@ -162,7 +162,7 @@ module.exports = {
                 // --- Reset Variables for EACH Target Loop Iteration (CRITICAL) ---
                 let replyEmbed = null;
                 let stickerId = null;
-                let finalContent = null;
+                let finalContent = message.content;
                 let hasUnmappedRoles = false;
                 let safeFiles = [];
                 let largeFiles = [];
