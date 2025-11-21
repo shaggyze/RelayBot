@@ -65,15 +65,16 @@ module.exports = {
                 .addBooleanOption(option =>
                     option.setName('dry_run')
                         .setDescription('If true, will only list servers to leave without actually leaving. (Default: True)')))
-        // --- [NEW SUBCOMMAND] ---
+        // --- [MODIFIED SUBCOMMAND] ---
         .addSubcommand(subcommand =>
             subcommand
                 .setName('check_subscription')
-                .setDescription('Manually checks the subscription status for a specific server.')
+                .setDescription('Checks the subscription status of a group\'s owner server.')
                 .addStringOption(option =>
-                    option.setName('server_id')
-                        .setDescription('The ID of the server to check.')
-                        .setRequired(true)))
+                    option.setName('group_name')
+                        .setDescription('The name of the group to check.')
+                        .setRequired(true)
+                        .setAutocomplete(true))) // Enable autocomplete
     ,
     async execute(interaction) {
         if (interaction.user.id !== BOT_OWNER_ID) {
@@ -601,30 +602,40 @@ module.exports = {
             // --- [NEW LOGIC BLOCK] ---
             } else if (subcommand === 'check_subscription') {
                 await interaction.deferReply({ ephemeral: true });
-                const guildId = interaction.options.getString('server_id');
+                // [THE FIX] Use 'group_name' instead of 'server_id'
+                const groupName = interaction.options.getString('group_name');
 
+                // 1. Look up the group to find the owner's guild ID
+                const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
+                
+                if (!group) {
+                    return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${groupName}".` });
+                }
+
+                const guildId = group.owner_guild_id;
                 const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
+                
                 if (!guild) {
-                    return interaction.editReply({ content: `❌ **Error:** I am not a member of the server with ID \`${guildId}\`.` });
+                    return interaction.editReply({ content: `❌ **Error:** I am not a member of the group owner's server (ID: \`${guildId}\`). Unable to check subscription.` });
                 }
 
                 try {
-                    // 1. Live API Check against Discord
+                    // 2. Live API Check
                     const entitlements = await interaction.client.application.entitlements.fetch({ guildId: guild.id });
                     const activeSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive);
                     
-                    // 2. Check Local Database Cache
+                    // 3. Database Cache Check
                     const dbSub = db.prepare('SELECT * FROM guild_subscriptions WHERE guild_id = ?').get(guild.id);
 
-                    // 3. Build the response embed
+                    // 4. Build Response
                     const embed = new EmbedBuilder()
-                        .setTitle(`Subscription Status for ${guild.name}`)
-                        .setColor(activeSub ? '#23A559' : '#ED4245') // Green for active, Red for inactive
+                        .setTitle(`Subscription Status for Group: ${groupName}`) // Updated Title
+                        .setDescription(`Owner Server: **${guild.name}** (\`${guild.id}\`)`) // Added Server Info
+                        .setColor(activeSub ? '#23A559' : '#ED4245')
                         .addFields(
                             { name: 'Server ID', value: `\`${guild.id}\`` }
                         );
 
-                    // --- API Status Section ---
                     if (activeSub) {
                         embed.addFields(
                             { name: 'Live API Status', value: '✅ Active Subscription Found' },
@@ -636,7 +647,6 @@ module.exports = {
                         embed.addFields({ name: 'Live API Status', value: '❌ No active subscription found for the premium SKU.' });
                     }
 
-                    // --- Database Cache Section ---
                     if (dbSub) {
                         embed.addFields(
                             { name: 'Database Cache Status', value: dbSub.is_active ? '✅ Active' : '❌ Inactive' },
@@ -673,8 +683,9 @@ module.exports = {
 
         // Check for the subcommands and options that need autocomplete
         if ((subcommand === 'delete_group' && focusedOption.name === 'name') ||
-            (subcommand === 'rename_group' && focusedOption.name === 'current_name')) {
-            
+            (subcommand === 'rename_group' && focusedOption.name === 'current_name') ||
+            (subcommand === 'check_subscription' && focusedOption.name === 'group_name')) {
+
             const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
             const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25')
                 .all(searchTerm);
