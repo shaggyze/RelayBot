@@ -3,7 +3,7 @@ const { Events, ActivityType, WebhookClient, ChannelType } = require('discord.js
 const db = require('../db/database.js');
 const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
-const { fetchSupporterIds, isSupporter } = require('../utils/supporterManager.js');
+const { fetchSupporterIds, isSupporter, getSupporterSet, setApiSubscribers } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
 const PREMIUM_SKU_ID = '1436488229455925299';
 
