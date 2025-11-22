@@ -450,7 +450,7 @@ module.exports = {
                     isFirstTarget = false;
 
                 } catch (error) {
-                    let targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
+                    const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
 
                     // [THE FIX] Handle Invalid Webhook (10015) with a user notification
                     if (error.code === 10015) { 
@@ -475,7 +475,6 @@ module.exports = {
                 }
             }
         } catch (error) {
-            let targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
 
             // [THE FIX] Handle Invalid Webhook (10015) with a user notification
             if (error.code === 10015) { 
@@ -496,7 +495,7 @@ module.exports = {
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
             } else {
                 console.error(`[ERROR] Code:`, error.code);
-                console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id} target #${targetChannelNameForError}.`, error);
+                console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
             }
         }
     },
