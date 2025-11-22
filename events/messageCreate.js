@@ -306,44 +306,15 @@ module.exports = {
                     }
                 
                     finalContent = targetContent;
-                    let fileNoticeString = "";
-                    if (largeFiles.length > 0) {
-                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large...)*`;
+                    const contentWithoutMentions = finalContent.replace(/<@!?&?#?(\d+)>/g, '').trim();
+                    
+                    // [FIX] The warning logic is correctly triggered only on known aliases that failed to translate/create.
+                    if (contentWithoutMentions.length === 0 && hasUnmappedRoles) {
+                        // [FIX] Simplified warning message as roleMap.role_name is not available in this scope after the loop.
+                        finalContent = `*(A role in the original message was not relayed because it has not been mapped in this server. An admin needs to map a role or run /relay toggle_auto_role to sync roles.)*`;
                     }
-                    finalPayloadContent = finalContent + fileNoticeString;
-
-                    // [THE FIX] Handle Forwarded Messages (Snapshots)
-                    // If the message is a forward, the content is inside 'messageSnapshots', not the main message.
-                    if (message.messageSnapshots && message.messageSnapshots.size > 0) {
-                        const snapshot = message.messageSnapshots.first();
-                        if (snapshot) {
-                            // 1. Extract Text Content
-                            if (snapshot.content) {
-                                finalPayloadContent += `\n> *Forwarded Message:*\n${snapshot.content}`;
-                            }
-
-                            // 2. Extract Embeds
-                            // We add snapshot embeds to our payloadEmbeds array
-                            if (snapshot.embeds && snapshot.embeds.length > 0) {
-                                payloadEmbeds.push(...snapshot.embeds);
-                            }
-
-                            // 3. Extract Attachments (Images/Files)
-                            // We add the URLs to our safeFiles array so they get uploaded
-                            if (snapshot.attachments && snapshot.attachments.size > 0) {
-                                snapshot.attachments.forEach(att => {
-                                    if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
-                                        safeFiles.push(att.url);
-                                        currentFileSize += att.size;
-                                    } else {
-                                        largeFiles.push({ name: att.name, size: att.size });
-                                    }
-                                });
-                            }
-                        }
-                    }
-
-                    if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
+                    
+                    if (finalContent.length > DISCORD_MESSAGE_LIMIT) {
                         const truncationNotice = `\n*(Message was truncated...)*`;
                         finalContent = finalContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
                     }
@@ -383,11 +354,43 @@ module.exports = {
                     }
 
                     // Prepare final content after checking large files
+                    finalContent = targetContent;
                     let fileNoticeString = "";
                     if (largeFiles.length > 0) {
-                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})`;
+                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large...)*`;
                     }
                     finalPayloadContent = finalContent + fileNoticeString;
+
+                    // [THE FIX] Handle Forwarded Messages (Snapshots)
+                    // If the message is a forward, the content is inside 'messageSnapshots', not the main message.
+                    if (message.messageSnapshots && message.messageSnapshots.size > 0) {
+                        const snapshot = message.messageSnapshots.first();
+                        if (snapshot) {
+                            // 1. Extract Text Content
+                            if (snapshot.content) {
+                                finalPayloadContent += `\n> *Forwarded Message:*\n${snapshot.content}`;
+                            }
+
+                            // 2. Extract Embeds
+                            // We add snapshot embeds to our payloadEmbeds array
+                            if (snapshot.embeds && snapshot.embeds.length > 0) {
+                                payloadEmbeds.push(...snapshot.embeds);
+                            }
+
+                            // 3. Extract Attachments (Images/Files)
+                            // We add the URLs to our safeFiles array so they get uploaded
+                            if (snapshot.attachments && snapshot.attachments.size > 0) {
+                                snapshot.attachments.forEach(att => {
+                                    if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
+                                        safeFiles.push(att.url);
+                                        currentFileSize += att.size;
+                                    } else {
+                                        largeFiles.push({ name: att.name, size: att.size });
+                                    }
+                                });
+                            }
+                        }
+                    }
 
                     if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
                         const truncationNotice = `\n*(Message was truncated...)*`;
