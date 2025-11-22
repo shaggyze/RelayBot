@@ -50,12 +50,12 @@ module.exports = {
             if (message.applicationId === message.client.user.id) return;
 
             // 3. Check Author ID (Double check for standard bot messages)
-            if (message.author.id === message.client.user.id) return;
-//console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
+            if (message.author.id === message.client.user.id) return
+console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
 
             // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
-//console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
+console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             if (!sourceChannelInfo) return;
 
             const processBots = sourceChannelInfo.process_bot_messages === 0;
@@ -67,7 +67,7 @@ module.exports = {
                 if (match) {
                     let [_, hookId, hookToken] = match;
                     try {
-//console.log(`[${executionId}] 1 ${storedWebhookId}`);
+console.log(`[${executionId}] 1 ${storedWebhookId}`);
                         await message.client.fetchWebhook(hookId, hookToken);
                     } catch (error) {
                         return;
@@ -78,7 +78,7 @@ module.exports = {
 
             // 6. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
             if (!processBots && (message.author.bot || message.webhookId)) return;
-//console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
+console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
 
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
