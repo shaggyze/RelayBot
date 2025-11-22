@@ -46,13 +46,23 @@ module.exports = {
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 console.log(`[${executionId}] null`);
             // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
-            if (message.author.id === message.client.user.id || message.client.user.id === message.webhookId) return; 
-console.log(`[${executionId}] 0 ${message.client.user.id}`);
+            if (message.author.id === message.client.user.id || message.client.user.id === message.webhookId) return;
+console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
             // --- End of Simplified Guard ---
 
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
 console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             if (!sourceChannelInfo) return;
+
+        if (message.webhookId) {
+            // Extract the ID from the stored URL: .../api/webhooks/123456789/token
+            const match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
+            const storedWebhookId = match ? match[1] : null;
+
+            if (storedWebhookId && message.webhookId === storedWebhookId) {
+                return; // STOP: This is a message sent by OUR bot's webhook for this channel.
+            }
+        }
 
             // 2. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
             if (!sourceChannelInfo.process_bot_messages & (message.author.bot || message.webhookId)) return;
