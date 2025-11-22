@@ -42,7 +42,7 @@ module.exports = {
         try {
             // 1. Always ignore DMs.
             if (!message.guild) return; 
-//console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
+console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 //console.log(`[${executionId}] null`);
 
@@ -56,10 +56,9 @@ console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.
             // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
 console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
-            if (!sourceChannelInfo) return;
-
-            const processBots = sourceChannelInfo.process_bot_messages === 0;
-
+            if (sourceChannelInfo) {
+                const processBots = sourceChannelInfo.process_bot_messages === 0;
+            }
             // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
             // This catches self-relays if the Application ID check fails for some reason.
             if (message.webhookId) {
@@ -67,7 +66,7 @@ console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
                 if (match) {
                     let [_, hookId, hookToken] = match;
                     try {
-console.log(`[${executionId}] 1 ${storedWebhookId}`);
+console.log(`[${executionId}] 1 ${hookId}`);
                         await message.client.fetchWebhook(hookId, hookToken);
                     } catch (error) {
                         return;
