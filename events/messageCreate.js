@@ -54,14 +54,14 @@ module.exports = {
 //console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
 
             // 4. Get DB Info
-            const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ?").get(message.channel.id);
+            const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
 //console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             if (!sourceChannelInfo) {
                 // [THE FIX] Validate the Source Webhook immediately.
                 // If the webhook for this channel has been deleted, we need to know, notify, and cleanup.
                 let match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\/(.+)/);
                 if (match) {
-                    const [_, hookId, hookToken] = match;
+                    let [_, hookId, hookToken] = match;
                     try {
                         // Attempt to fetch the webhook to ensure it still exists.
                         // This is a lightweight API call compared to sending a message.
@@ -70,17 +70,23 @@ module.exports = {
                         return;
                     }
                 }
+                return;
             }
             const processBots = sourceChannelInfo.process_bot_messages === 0;
 
             // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
             // This catches self-relays if the Application ID check fails for some reason.
             if (message.webhookId) {
-                let match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
+                let match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\/(.+)/);
                 if (match) {
-                    const storedWebhookId = match ? match[1] : null;
+                    let [_, hookId, hookToken] = match;
+                    try {
 //console.log(`[${executionId}] 1 ${storedWebhookId}`);
-                    if (storedWebhookId && message.webhookId === storedWebhookId) return;
+                        await message.client.fetchWebhook(hookId, hookToken);
+                    } catch (error) {
+                        return;
+                    }
+                    if (hookId && message.webhookId === hookId) return;
                 }
             }
 
