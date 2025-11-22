@@ -56,22 +56,8 @@ module.exports = {
             // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
 //console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
-            if (!sourceChannelInfo) {
-                // [THE FIX] Validate the Source Webhook immediately.
-                // If the webhook for this channel has been deleted, we need to know, notify, and cleanup.
-                let match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\/(.+)/);
-                if (match) {
-                    let [_, hookId, hookToken] = match;
-                    try {
-                        // Attempt to fetch the webhook to ensure it still exists.
-                        // This is a lightweight API call compared to sending a message.
-                        await message.client.fetchWebhook(hookId, hookToken);
-                    } catch (error) {
-                        return;
-                    }
-                }
-                return;
-            }
+            if (!sourceChannelInfo) return;
+
             const processBots = sourceChannelInfo.process_bot_messages === 0;
 
             // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
