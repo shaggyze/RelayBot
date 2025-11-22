@@ -51,25 +51,36 @@ module.exports = {
 
             // 3. Check Author ID (Double check for standard bot messages)
             if (message.author.id === message.client.user.id) return;
-console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
+//console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
 
             // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ?").get(message.channel.id);
-console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
-            if (!sourceChannelInfo) return;
-
+//console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
+            if (!sourceChannelInfo) {
+                // [THE FIX] Validate the Source Webhook immediately.
+                // If the webhook for this channel has been deleted, we need to know, notify, and cleanup.
+                let match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\/(.+)/);
+                const [_, hookId, hookToken] = match;
+                try {
+                    // Attempt to fetch the webhook to ensure it still exists.
+                    // This is a lightweight API call compared to sending a message.
+                    await message.client.fetchWebhook(hookId, hookToken);
+                } catch (error) {
+                    return;
+                }
+            }
             // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
             // This catches self-relays if the Application ID check fails for some reason.
             if (message.webhookId) {
-                const match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
+                let match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
                 const storedWebhookId = match ? match[1] : null;
-console.log(`[${executionId}] 1 ${storedWebhookId}`);
+//console.log(`[${executionId}] 1 ${storedWebhookId}`);
                 if (storedWebhookId && message.webhookId === storedWebhookId) return;
             }
 
             // 6. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
             if (!sourceChannelInfo.process_bot_messages && (message.author.bot || message.webhookId)) return;
-console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
+//console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
 
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
@@ -439,9 +450,24 @@ console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
                     isFirstTarget = false;
 
                 } catch (error) {
-                    const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
-                    if (error.code === 10015) {
-                        console.error(`[AUTO-CLEANUP][${executionId}] Webhook for channel #${targetChannelNameForError} is invalid. Removing from relay.`);
+                    let targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
+
+                    // [THE FIX] Handle Invalid Webhook (10015) with a user notification
+                    if (error.code === 10015) { 
+                        console.error(`[AUTO-CLEANUP][${executionId}] Webhook for channel #${targetChannelNameForError} is invalid. Attempting to notify channel and remove from relay.`);
+                        
+                        // 1. Try to notify the channel that the link is broken
+                        try {
+                            const channel = await message.client.channels.fetch(target.channel_id);
+                            if (channel) {
+                                await channel.send("⚠️ **Relay Connection Lost:** The webhook used for relaying messages in this channel was deleted or is invalid.\n\n**Action Required:** This channel has been automatically unlinked. An admin must run `/relay link_channel` to reconnect it.");
+                            }
+                        } catch (notifyError) {
+                            // If we can't fetch the channel or send a message (e.g., channel deleted, no permissions), just log it.
+                            console.warn(`[AUTO-CLEANUP-WARN] Could not notify channel ${target.channel_id} about the broken link: ${notifyError.message}`);
+                        }
+
+                        // 2. Proceed with cleanup
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
                         console.error(`[RELAY-LOOP-ERROR][${executionId}] FAILED to process relay for target #${targetChannelNameForError}.`, error);
@@ -449,8 +475,29 @@ console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
                 }
             }
         } catch (error) {
-            console.error(`[ERROR] Code:`, error.code);
-            console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
+            let targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
+
+            // [THE FIX] Handle Invalid Webhook (10015) with a user notification
+            if (error.code === 10015) { 
+                console.error(`[AUTO-CLEANUP][${executionId}] Webhook for channel #${targetChannelNameForError} is invalid. Attempting to notify channel and remove from relay.`);
+                
+                // 1. Try to notify the channel that the link is broken
+                try {
+                    const channel = await message.client.channels.fetch(target.channel_id);
+                    if (channel) {
+                        await channel.send("⚠️ **Relay Connection Lost:** The webhook used for relaying messages in this channel was deleted or is invalid.\n\n**Action Required:** This channel has been automatically unlinked. An admin must run `/relay link_channel` to reconnect it.");
+                    }
+                } catch (notifyError) {
+                    // If we can't fetch the channel or send a message (e.g., channel deleted, no permissions), just log it.
+                    console.warn(`[AUTO-CLEANUP-WARN] Could not notify channel ${target.channel_id} about the broken link: ${notifyError.message}`);
+                }
+
+                // 2. Proceed with cleanup
+                db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
+            } else {
+                console.error(`[ERROR] Code:`, error.code);
+                console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id} target #${targetChannelNameForError}.`, error);
+            }
         }
     },
 };
