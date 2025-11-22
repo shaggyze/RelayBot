@@ -44,29 +44,33 @@ module.exports = {
             if (!message.guild) return; 
             console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
-console.log(`[${executionId}] null`);
-            // 2. ALWAYS ignore anything sent by THIS bot's user account. This covers all self-relays via webhook too.
-            if (message.author.id === message.client.user.id && message.webhookId) return;
-console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
-            // --- End of Simplified Guard ---
+//console.log(`[${executionId}] null`);
 
+            // 2. Check Application ID (Catches your specific webhooks AND your bot user)
+            if (message.applicationId === message.client.user.id) return;
+            
+            // 3. Check Author ID (Double check for standard bot messages)
+            if (message.author.id === message.client.user.id) return;
+//console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
+
+            // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
-console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
+//console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             if (!sourceChannelInfo) return;
 
-        if (message.webhookId) {
-            // Extract the ID from the stored URL: .../api/webhooks/123456789/token
-            const match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
-            const storedWebhookId = match ? match[1] : null;
-console.log(`[${executionId}] 1 ${storedWebhookId}`);
-            if (storedWebhookId && message.webhookId === storedWebhookId) {
-                return; // STOP: This is a message sent by OUR bot's webhook for this channel.
+            // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
+            // This catches self-relays if the Application ID check fails for some reason.
+            if (message.webhookId) {
+                const match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
+                const storedWebhookId = match ? match[1] : null;
+//console.log(`[${executionId}] 1 ${storedWebhookId}`);
+                if (storedWebhookId && message.webhookId === storedWebhookId) return;
             }
-        }
 
-            // 2. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
-            if (!sourceChannelInfo.process_bot_messages & (message.author.bot || message.webhookId)) return;
-console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
+            // 6. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
+            if (!sourceChannelInfo.process_bot_messages && (message.author.bot || message.webhookId)) return;
+//console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
+
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
@@ -90,7 +94,7 @@ console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
                     ON CONFLICT(group_id, day) DO UPDATE SET character_count = character_count + excluded.character_count
                 `).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
             }
-console.log(`[${executionId}] 2`);
+//console.log(`[${executionId}] 2`);
             const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
 
@@ -150,12 +154,12 @@ console.log(`[${executionId}] 2`);
 			const senderName = message.member?.displayName ?? message.author.username;
 			const serverBrand = sourceChannelInfo.brand_name || message.guild.name;
 			let username = `${senderName} (${serverBrand})`;
-console.log(`[${executionId}] 3`);
+//console.log(`[${executionId}] 3`);
 			if (username.length > MAX_USERNAME_LENGTH) {
 				username = username.substring(0, MAX_USERNAME_LENGTH - 3) + '...';
 			}
             const avatarURL = message.author.displayAvatarURL();
-console.log(`[${executionId}] 4`);
+//console.log(`[${executionId}] 4`);
             console.log(`[EVENT][${executionId}] Message received from ${message.author.tag} in linked channel #${message.channel.name}`);
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
             if (targetChannels.length === 0) {
