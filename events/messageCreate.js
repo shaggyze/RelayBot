@@ -51,12 +51,12 @@ module.exports = {
 
             // 3. Check Author ID (Double check for standard bot messages)
             if (message.author.id === message.client.user.id) return;
-//console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
+console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
 
             // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
 console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
-            //if (!sourceChannelInfo) return;
+            if (!sourceChannelInfo) return;
 
             // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
             // This catches self-relays if the Application ID check fails for some reason.
