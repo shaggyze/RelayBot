@@ -309,7 +309,7 @@ module.exports = {
                     const contentWithoutMentions = finalContent.replace(/<@!?&?#?(\d+)>/g, '').trim();
                     
                     // [FIX] The warning logic is correctly triggered only on known aliases that failed to translate/create.
-                    if (contentWithoutMentions.length === 0 && hasUnmappedRoles) {
+                    if (contentWithoutMentions.length == 0 && hasUnmappedRoles) {
                         // [FIX] Simplified warning message as roleMap.role_name is not available in this scope after the loop.
                         finalContent = `*(A role in the original message was not relayed because it has not been mapped in this server. An admin needs to map a role or run /relay toggle_auto_role to sync roles.)*`;
                     }
