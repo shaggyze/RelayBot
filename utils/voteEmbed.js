@@ -1,6 +1,6 @@
 // utils/voteEmbed.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const PREMIUM_SKU_ID = '1436488229455925299';
+const PREMIUM_SKU_ID = '1441846633800138863';
 // This function creates and returns the message payload for voting/support.
 function createVoteMessage() {
     const voteEmbed = new EmbedBuilder()
