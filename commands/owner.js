@@ -628,7 +628,7 @@ module.exports = {
                 try {
                     // 2. Live API Check
                     const entitlements = await interaction.client.application.entitlements.fetch({ guildId: guild.id });
-                    const activeSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive);
+                    const activeSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
                     
                     // 3. Database Cache Check
                     const dbSub = db.prepare('SELECT * FROM guild_subscriptions WHERE guild_id = ?').get(guild.id);

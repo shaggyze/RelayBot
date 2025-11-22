@@ -8,8 +8,8 @@ const { uploadDatabase } = require('../utils/backupManager.js');
 const PREMIUM_SKU_ID = '1436488229455925299';
 
 async function primeMemberCache(client) {
-    console.log('[Cache] Starting background member cache priming for all guilds...');
     const guilds = Array.from(client.guilds.cache.values());
+    console.log('[Cache] Starting background member cache priming for all #${guilds} guilds...');
     for (const guild of guilds) {
         try {
             console.log(`[Cache] Fetching members for "${guild.name}"...`);
@@ -125,7 +125,7 @@ async function syncGuildSubscriptions(client) {
     for (const guild of client.guilds.cache.values()) {
         try {
             const entitlements = await client.application.entitlements.fetch({ guildId: guild.id });
-            const activeRelayBotSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive);
+            const activeRelayBotSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
 
             if (activeRelayBotSub) {
                 const expiresTimestamp = activeRelayBotSub.endsTimestamp;

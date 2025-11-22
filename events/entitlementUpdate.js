@@ -11,7 +11,7 @@ module.exports = {
         if (entitlement.skuId !== PREMIUM_SKU_ID) return;
         if (!entitlement.guildId) return;
 
-        const isActive = entitlement.isActive;
+        const isActive = entitlement.isActive();
         const expiresTimestamp = entitlement.endsTimestamp;
 
         console.log(`[SUBSCRIPTION] Premium SKU Entitlement UPDATED for guild ${entitlement.guildId}. Active: ${isActive}`);
