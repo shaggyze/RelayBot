@@ -24,7 +24,7 @@ function createVoteMessage() {
                 .setEmoji('🗳️'),
             new ButtonBuilder()
                 .setStyle(ButtonStyle.Premium)
-                .setSKUId('1436488229455925299')
+                .setSKUId('397069734469435446')
         );
 
     return {
