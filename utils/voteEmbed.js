@@ -15,13 +15,13 @@ function createVoteMessage() {
             new ButtonBuilder()
                 .setLabel('Vote on Top.gg')
                 .setStyle(ButtonStyle.Link)
-                .setURL('https://top.gg/bot/1397069734469435446/vote'),
-                .setEmoji('⭐')
+                .setURL('https://top.gg/bot/1397069734469435446/vote')
+                .setEmoji('⭐'),
             new ButtonBuilder()
                 .setLabel('Support on Patreon')
                 .setStyle(ButtonStyle.Link)
                 .setURL('https://patreon.com/shaggyze')
-                .setEmoji('🗳️')
+                .setEmoji('🗳️'),
             new ButtonBuilder()
                 .setStyle(ButtonStyle.Premium)
                 .setSKUId('1436488229455925299')
