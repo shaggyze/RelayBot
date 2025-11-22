@@ -44,17 +44,25 @@ async function runDailyVoteReminder(client) {
         let guild;
 
         try {
-            guild = await client.guilds.fetch(guildInfo.guild_id);
-            if (!guild) {
-                db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildInfo.guild_id);
-                db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildInfo.guild_id);
-                db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildInfo.guild_id);
-                continue;
-            }
+            // [THE FIX] Check Subscription Status FIRST (Faster than fetching members)
+            const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(guildInfo.guild_id);
+            if (subscription) {
+                hasSupporter = true; // Server is subscribed, treat as supporter
+            } else {
+                // No subscription, proceed to check members
+                guild = await client.guilds.fetch(guildInfo.guild_id);
+                if (!guild) {
+                    // Cleanup logic if guild is missing
+                    db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildInfo.guild_id);
+                    db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildInfo.guild_id);
+                    db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildInfo.guild_id);
+                    continue;
+                }
 
-            const members = await guild.members.fetch({ time: 120000 });
-            hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
-            console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+                const members = await guild.members.fetch({ time: 120000 });
+                hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
+                console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
+            }
 
         } catch (error) {
             const guildId = guildInfo.guild_id;
@@ -124,7 +132,7 @@ async function syncGuildSubscriptions(client) {
                 db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)')
                   .run(guild.id, expiresTimestamp, Date.now());
                 activeSubs++;
-                console.log(`[Subscriptions] Found ${activeRelayBotSub} for guild #${activeSubs} ${guild.name} (${guild.id})`);
+                console.log(`[Subscriptions] Found subscription for guild #${activeSubs} ${guild.name} (${guild.id})`);
             } else {
                 db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 0, NULL, ?)')
                   .run(guild.id, Date.now());

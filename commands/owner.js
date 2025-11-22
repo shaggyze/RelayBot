@@ -109,6 +109,12 @@ module.exports = {
                     }
                 }
 
+
+                const subscribedGuilds = db.prepare('SELECT guild_id FROM guild_subscriptions WHERE is_active = 1').all();
+                for (const row of subscribedGuilds) {
+                    supporterGuilds.add(row.guild_id);
+                }
+
                 const today = getRateLimitDayString(); // Assuming getRateLimitDayString is in scope
                 const todaysStatsRaw = db.prepare('SELECT group_id, character_count, warning_sent_at FROM group_stats WHERE day = ?').all(today);
                 const todaysStatsMap = new Map(todaysStatsRaw.map(stat => [stat.group_id, { count: stat.character_count, paused: !!stat.warning_sent_at }]));

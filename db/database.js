@@ -86,7 +86,7 @@ const migrations = [
             CREATE TABLE group_stats (
                 stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id INTEGER NOT NULL,
-                day TEXT NOT NULL, -- Stored as 'YYYY-MM-DD'
+                day TEXT NOT NULL,
                 character_count INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE,
                 UNIQUE(group_id, day)
@@ -102,7 +102,7 @@ const migrations = [
                 group_id INTEGER NOT NULL,
                 day TEXT NOT NULL,
                 character_count INTEGER NOT NULL DEFAULT 0,
-                warning_sent_at INTEGER, -- Timestamp of when the warning was sent, NULL by default
+                warning_sent_at INTEGER,
                 FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE,
                 UNIQUE(group_id, day)
             );
@@ -158,8 +158,8 @@ const migrations = [
         CREATE TABLE group_blacklist (
             blacklist_id INTEGER PRIMARY KEY AUTOINCREMENT,
             group_id INTEGER NOT NULL,
-            blocked_id TEXT NOT NULL, -- This will be a User ID or a Guild ID
-            type TEXT NOT NULL, -- 'USER' or 'GUILD'
+            blocked_id TEXT NOT NULL,
+            type TEXT NOT NULL,
             FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE,
             UNIQUE(group_id, blocked_id)
         );

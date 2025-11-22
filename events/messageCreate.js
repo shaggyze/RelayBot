@@ -20,15 +20,28 @@ const groupsBeingWarned = new Set();
 
 async function checkGroupForSupporters(client, groupId) {
     const supporterIdList = getSupporterSet();
-    if (supporterIdList.size === 0) return false;
+    
     const guildsInGroup = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId);
+    
     for (const row of guildsInGroup) {
         try {
-            const guild = await client.guilds.fetch(row.guild_id);
-            for (const supporterId of supporterIdList) {
-                if (await guild.members.fetch(supporterId).catch(() => null)) return true;
+            // [THE FIX] Check Subscription Status FIRST (DB check is faster than API)
+            const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(row.guild_id);
+            if (subscription) {
+                return true; // Found a subscription, group is supported
             }
-        } catch {}
+
+            // Check for User Supporters if no subscription
+            if (supporterIdList.size > 0) {
+                const guild = await client.guilds.fetch(row.guild_id);
+                for (const supporterId of supporterIdList) {
+                    if (await guild.members.fetch(supporterId).catch(() => null)) return true;
+                }
+            }
+        } catch (error) {
+            console.warn(`[SupporterCheck] Failed to check guild ${row.guild_id}: ${error.message}. Defaulting to supporter status.`);
+            return true;
+        }
     }
     return false;
 }
@@ -73,11 +86,11 @@ module.exports = {
                         await message.client.fetchWebhook(hookId, hookToken);
                     } catch (error) {
                         if (error.code === 10015) {
-                            console.error(`[AUTO-CLEANUP] Source webhook for channel #${message.channel.name} is invalid. Removing link.`);
+                            console.error(`[AUTO-CLEANUP][${executionId}] Source webhook for channel #${message.channel.name} is invalid. Removing link.`);
                             try {
                                 await message.channel.send("⚠️ **Relay Connection Issue:** The webhook for this channel was deleted or is invalid. The relay link has been removed. An admin must run `/relay link_channel` to reconnect.");
                             } catch (sendError) {
-                                console.warn(`[AUTO-CLEANUP] Could not send warning to channel #${message.channel.name}.`);
+                                console.warn(`[AUTO-CLEANUP][${executionId}] Could not send warning to channel #${message.channel.name}.`);
                             }
                             db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(message.channel.id);
                             return;
@@ -89,13 +102,13 @@ module.exports = {
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
-				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
+				console.warn(`[BLOCK][${executionId}] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
 				return; // Stop processing immediately
 			}
 
             const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
             if (!groupInfo) {
-                console.error(`[ERROR] A linked channel (${message.channel.id}) exists for a group_id (${sourceChannelInfo.group_id}) that has been deleted. Cleaning up...`);
+                console.error(`[ERROR][${executionId}] A linked channel (${message.channel.id}) exists for a group_id (${sourceChannelInfo.group_id}) that has been deleted. Cleaning up...`);
                 db.prepare('DELETE FROM linked_channels WHERE group_id = ?').run(sourceChannelInfo.group_id);
                 return;
             }
@@ -110,59 +123,45 @@ module.exports = {
                 `).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
             }
 //console.log(`[${executionId}] 2`);
+            
+            // --- Rate Limit Logic with updated supporter check ---
             const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
+            
+            if (!isSupporterGroup && stats && (stats.character_count > RATE_LIMIT_CHARS)) {
+                if (groupsBeingWarned.has(sourceChannelInfo.group_id)) return;
 
-            // This is the main gate for the rate limit check.
-            if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
-                
-                // First, check for the premium subscription bypass.
-                const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ?').get(message.guild.id);
-                if (subscription && subscription.is_active) {
-                    // This guild has an active premium subscription.
-                    // By doing nothing here, the code will continue outside this 'if' block and relay the message.
-                    //console.log(`[SUBSCRIPTION] Bypassing rate limit for guild ${message.guild.id} due to active subscription.`);
-                } else {
-                    // --- This is the "You ARE being rate-limited" block ---
+                if (!stats.warning_sent_at) {
+                    try {
+                        groupsBeingWarned.add(sourceChannelInfo.group_id);
 
-                    // Check if another message is already sending the warning to prevent a race condition.
-                    if (groupsBeingWarned.has(sourceChannelInfo.group_id)) {
-                        return; // Stop immediately.
-                    }
-
-                    // Check if a warning needs to be sent for the first time today.
-                    if (!stats.warning_sent_at) {
-                        try {
-                            groupsBeingWarned.add(sourceChannelInfo.group_id);
-
-                            console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
-                            const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
-                            const now = new Date();
-                            const nextResetTime = new Date();
-                            nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
-                            if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
-                            const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
-                            const warningPayload = createVoteMessage();
-                            warningPayload.username = 'RelayBot';
-                            warningPayload.avatarURL = message.client.user.displayAvatarURL();
-                            warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
-                            for (const target of allTargetChannels) {
-                                try {
-                                    const webhookClient = new WebhookClient({ url: target.webhook_url });
-                                    await webhookClient.send(warningPayload);
-                                } catch {}
-                            }
-                            db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
-
-                        } finally {
-                            groupsBeingWarned.delete(sourceChannelInfo.group_id);
+                        console.log(`[RATE LIMIT][${executionId}] Group "${groupInfo.group_name}" has now exceeded the daily limit. Sending warning.`);
+                        const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                        const now = new Date();
+                        const nextResetTime = new Date();
+                        nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
+                        if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
+                        const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
+                        const warningPayload = createVoteMessage();
+                        warningPayload.username = 'RelayBot';
+                        warningPayload.avatarURL = message.client.user.displayAvatarURL();
+                        warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
+                        for (const target of allTargetChannels) {
+                            try {
+                                const webhookClient = new WebhookClient({ url: target.webhook_url });
+                                await webhookClient.send(warningPayload);
+                            } catch {}
                         }
-                    }
+                        db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
 
-                    // [THE FIX] CRITICAL: This return stops the message from being relayed,
-                    // regardless of whether a warning was just sent or had been sent previously.
-                    return; 
+                    } finally {
+                        groupsBeingWarned.delete(sourceChannelInfo.group_id);
+                    }
                 }
+
+                // [THE FIX] CRITICAL: This return stops the message from being relayed,
+                // regardless of whether a warning was just sent or had been sent previously.
+                return; 
             }
 
 			// --- Branding Logic (Used to construct 'username' and 'avatarURL') ---
@@ -296,7 +295,7 @@ module.exports = {
                                     db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(target.group_id, target.guild_id, roleMap.role_name, newRole.id);
                                     targetContent = targetContent.replace(mention, `<@&${newRole.id}>`);
                                 } catch (roleError) {
-                                    console.error(`[AUTO-ROLE-FAIL] FAILED to create/map role "${roleMap.role_name}" on target server:`, roleError);
+                                    console.error(`[AUTO-ROLE-FAIL][${executionId}] FAILED to create/map role "${roleMap.role_name}" on target server:`, roleError);
                                     hasUnmappedRoles = true; 
                                 }
                             } 
@@ -396,8 +395,23 @@ module.exports = {
                     
                     // --- Conditional Verbose Logging Execution ---
                     if (shouldLogVerbose) {
-                        // NOTE: Verbose logging body would be here if implemented.
-                        console.error(`[FATAL-DEBUG][${executionId}] Verbose logging triggered for target ${targetChannelName}. Skipping detailed log dump.`);
+                        // [REVISED LOGGING] Direct logging for clarity
+                        console.error(`[${executionId}] PAYLOAD DEBUG START (Message ID: ${message.id}, Triggered by Skip/Error) ---`);
+                        console.error(`[DEBUG] Target Channel: #${targetChannelName}`);
+                        console.error(`[DEBUG] Initial JSON Size: ${initialJsonSize} bytes`);
+                        console.error(`[DEBUG] Files selected: ${safeFiles.length} (${currentFileSize} bytes total)`);
+                        console.error(`[DEBUG] Files skipped: ${largeFiles.length}`);
+                        console.error(`[DEBUG] File Notice Size: ${Buffer.byteLength(fileNoticeString, 'utf8')} bytes`);
+                        console.error(`[DEBUG] Final Content Size: ${Buffer.byteLength(finalPayloadContent, 'utf8')} bytes`);
+                        console.error(`[DEBUG] Final JSON payload size: ${Buffer.byteLength(JSON.stringify(finalPayloadForSend))} bytes`);
+                        console.error(`[DEBUG] ESTIMATED TOTAL DATA SIZE: ${Buffer.byteLength(JSON.stringify(finalPayloadForSend)) + currentFileSize} bytes`);
+                        console.error(`[DEBUG] Discord Limit: ~10MB (${10 * 1024 * 1024} bytes)`);
+                        console.error(`[DEBUG] Internal MAX_PAYLOAD_SIZE: ${MAX_PAYLOAD_SIZE} bytes`);
+                        console.error(`[EXACT_CHECK_STATE] content.trim(): "${logFinalContentTrimmed}" (isEmpty: ${isContentEmpty})`);
+                        console.error(`[EXACT_CHECK_STATE] files.length: ${finalPayloadForSend.files?.length}`);
+                        console.error(`[EXACT_CHECK_STATE] embeds.length: ${finalPayloadForSend.embeds?.length}`);
+                        console.error(`[EXACT_CHECK_STATE] sticker_ids present: ${haveStickerIds}`);
+                        console.error(`[${executionId}] PAYLOAD DEBUG END ---`);
                     }
 
                     let relayedMessage = null;
@@ -410,7 +424,7 @@ module.exports = {
                             shouldLogVerbose = true; 
                             throw sendError; 
                         } else if (sendError.code === 50006 && finalPayloadForSend.sticker_ids) { 
-                            console.log(`[RELAY] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
+                            console.log(`[RELAY][${executionId}] Sticker relay failed for message ${message.id}. Retrying with text fallback.`);
                             try {
                                 // Access sticker info from the original message context
                                 const sticker = message.stickers.first(); 
@@ -425,7 +439,7 @@ module.exports = {
                                     relayedMessage = await webhookClient.send(fallbackPayload);
                                 }
                             } catch (fallbackError) {
-                                console.error(`[RELAY] FAILED on fallback attempt for message ${message.id}:`, fallbackError);
+                                console.error(`[RELAY][${executionId}] FAILED on fallback attempt for message ${message.id}:`, fallbackError);
                                 if (fallbackError.code === 40005) { 
                                     shouldLogVerbose = true; 
                                     throw fallbackError;
@@ -467,7 +481,7 @@ module.exports = {
                                 await brokenChannel.send("⚠️ **Relay Connection Lost:** The webhook used for relaying messages in this channel was deleted or is invalid.\n\n**Action Required:** This channel has been automatically unlinked. An admin must run `/relay link_channel` to reconnect it.");
                             }
                         } catch (notifyError) {
-                            console.warn(`[AUTO-CLEANUP-WARN] Could not notify channel ${target.channel_id}: ${notifyError.message}`);
+                            console.warn(`[AUTO-CLEANUP-WARN][${executionId}] Could not notify channel ${target.channel_id}: ${notifyError.message}`);
                         }
 
                         db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
@@ -480,7 +494,7 @@ module.exports = {
             }
         } catch (error) {
             if (error.code === 40005) shouldLogVerbose = true; 
-            console.error(`[ERROR] Code:`, error.code);
+            console.error(`[ERROR][${executionId}] Code:`, error.code);
             console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id}.`, error);
         }
     },
