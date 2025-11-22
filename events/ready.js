@@ -119,77 +119,98 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
-// events/ready.js
-
-// ... (imports and other functions remain the same) ...
-
-async function syncGuildSubscriptions(client) {
-    console.log('[Subscriptions] Starting global sync of guild subscriptions...');
+// --- [NEW] Sync Subscriptions & Manage Role ---
+async function syncGlobalSubscriptions(client) {
+    console.log('[Subscriptions] Starting global sync...');
     
-    // 1. Reset local cache to ensure we don't have stale data
-    db.prepare('DELETE FROM guild_subscriptions').run();
-
     try {
-        // 2. Fetch ALL entitlements for the application (Global Fetch)
-        // This gets us everything, including User IDs and Guild IDs
+        // 1. Fetch ALL entitlements
         const entitlements = await client.application.entitlements.fetch();
         
-        // Filter for your specific Premium SKU and only Active ones
+        // 2. Filter for Active + Your SKU
         const activeSubs = entitlements.filter(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
         
-        console.log(`[Subscriptions] API returned ${activeSubs.size} active premium subscriptions.`);
+        const subscriberUserIds = [];
+        const subscriberGuildIds = []; // For direct guild subs (rare but possible)
 
-        let processedCount = 0;
+        activeSubs.forEach(sub => {
+            if (sub.userId) subscriberUserIds.push(sub.userId);
+            if (sub.guildId) subscriberGuildIds.push(sub.guildId);
+        });
 
-        for (const sub of activeSubs.values()) {
-            const guildId = sub.guildId;
-            const userId = sub.userId; // The user who bought it
-            const expiresTimestamp = sub.endsTimestamp;
+        // 3. Send User IDs to SupporterManager
+        // This makes isSupporter(id) return true for them, which enables rate-limit bypass
+        // in ANY guild they are currently in (handled by messageCreate.js logic).
+        setApiSubscribers(subscriberUserIds);
 
-            if (!guildId) {
-                // This is a User Subscription (not assigned to a guild), which works differently.
-                // If you support User Subs applying to all their owned groups, you'd handle that here.
-                console.log(`[Subscriptions] User ${userId} has a personal subscription (not assigned to a specific guild).`);
-                continue;
-            }
-
-            // 3. Match to Group Name (Diagnostic Step)
-            // Check if this guild owns a relay group
-            const groupOwnerInfo = db.prepare('SELECT group_name, group_id FROM relay_groups WHERE owner_guild_id = ?').get(guildId);
-            
-            // Check if this guild is just LINKED to a group (if supporters apply to the group they are in)
-            const linkedInfo = db.prepare('SELECT group_id FROM linked_channels WHERE guild_id = ? LIMIT 1').get(guildId);
-
-            let logMsg = `[Subscriptions] Found Sub: User \`${userId}\` for Guild \`${guildId}\`.`;
-
-            if (groupOwnerInfo) {
-                logMsg += ` -> OWNS Group: "**${groupOwnerInfo.group_name}**" (ID: ${groupOwnerInfo.group_id}).`;
-            } else if (linkedInfo) {
-                // Fetch group name for the linked group
-                const linkedGroupName = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(linkedInfo.group_id)?.group_name;
-                logMsg += ` -> MEMBER of Group: "**${linkedGroupName}**" (ID: ${linkedInfo.group_id}).`;
-            } else {
-                logMsg += ` -> Not currently linked to any relay group.`;
-            }
-
-            console.log(logMsg);
-
-            // 4. Update Database Cache
-            // We store the subscription so messageCreate.js can check it quickly
-            db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)')
-              .run(guildId, expiresTimestamp, Date.now());
-            
-            processedCount++;
+        // 4. Update Database for Direct Guild Subs (if any)
+        db.prepare('UPDATE guild_subscriptions SET is_active = 0').run(); // Reset
+        
+        for (const gId of subscriberGuildIds) {
+            // We use a dummy timestamp for now or extract from entitlement if needed
+            db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, updated_at) VALUES (?, 1, ?)')
+              .run(gId, Date.now());
         }
 
-        console.log(`[Subscriptions] Sync complete. Cached ${processedCount} active guild subscriptions.`);
+        console.log(`[Subscriptions] Synced. Users: ${subscriberUserIds.length}, Guilds: ${subscriberGuildIds.length}`);
+
+        // 5. Handle Dev Server Role Logic
+        await manageDevServerRole(client);
 
     } catch (error) {
-        console.error(`[Subscriptions] CRITICAL ERROR syncing entitlements: ${error.message}`);
+        console.error(`[Subscriptions] Critical Error: ${error.message}`);
     }
 }
 
-// ... (rest of the file: scheduleNextNoonTask, runDbPruning, execute) ...
+// --- [NEW] Dev Server Role Manager ---
+async function manageDevServerRole(client) {
+    const devGuildId = process.env.DEV_GUILD_ID; // Ensure this is in your .env
+    if (!devGuildId) return;
+
+    try {
+        const guild = await client.guilds.fetch(devGuildId);
+        if (!guild) return;
+
+        // A. Ensure Role Exists
+        let role = guild.roles.cache.find(r => r.name === 'Supporter');
+        if (!role) {
+            console.log('[Role-Sync] "Supporter" role not found. Creating it...');
+            role = await guild.roles.create({
+                name: 'Supporter',
+                color: '#FFD700', // Gold
+                hoist: true,      // Display separately
+                mentionable: true,
+                reason: 'Auto-created for RelayBot Premium Subscribers'
+            });
+        }
+
+        // B. Get all Supporters (Text File + API Subs)
+        const allSupporters = getSupporterSet();
+
+        // C. Fetch all members of Dev Guild to ensure cache is fresh
+        const members = await guild.members.fetch();
+
+        // D. Loop Members: Grant or Revoke
+        for (const [memberId, member] of members) {
+            if (member.user.bot) continue;
+
+            const hasRole = member.roles.cache.has(role.id);
+            const shouldHaveRole = allSupporters.has(memberId);
+
+            if (shouldHaveRole && !hasRole) {
+                await member.roles.add(role);
+                console.log(`[Role-Sync] Granted Role to ${member.user.tag}`);
+            } 
+            else if (!shouldHaveRole && hasRole) {
+                await member.roles.remove(role);
+                console.log(`[Role-Sync] Revoked Role from ${member.user.tag} (No longer a supporter)`);
+            }
+        }
+
+    } catch (error) {
+        console.error(`[Role-Sync] Error managing Dev Guild roles: ${error.message}`);
+    }
+}
 
 function scheduleNextNoonTask(client) {
     const now = new Date();
@@ -247,14 +268,16 @@ module.exports = {
         // --- Non-blocking startup tasks (run in the background without await) ---
         primeMemberCache(client);
         fetchSupporterIds();
-        syncGuildSubscriptions(client);
+        
+        syncGlobalSubscriptions(client);
 
         // --- Scheduled Tasks ---
+        const thirtyInMs = 30 * 60 * 1000;
         const oneHourInMs = 60 * 60 * 1000;
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
         // Hourly supporter fetch
-        setInterval(fetchSupporterIds, oneHourInMs);
+        setInterval(fetchSupporterIds, thirtyInMs);
         
         // Message cleanup (every 15 minutes)
         setInterval(() => {
@@ -275,7 +298,7 @@ module.exports = {
         }, 15 * 60 * 1000);
 
         // Daily Subscription Sync
-        setInterval(() => syncGuildSubscriptions(client), twentyFourHoursInMs);
+        setInterval(() => syncGlobalSubscriptions(client), thirtyInMs);
 
         // Daily Vote Reminder
         scheduleNextNoonTask(client);

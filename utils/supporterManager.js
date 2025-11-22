@@ -6,36 +6,28 @@ const WEBHOOK_URL = 'https://shaggyze.website/RelayBot/webhook.php';
 const PATRON_LIST_URL = 'https://shaggyze.website/RelayBot/patrons.txt';
 const VOTER_LIST_URL = 'https://shaggyze.website/RelayBot/voters.txt';
 
-let supporterIds = new Set();
+// We keep two sets: one for text files, one for discord API subs
+let textFileSupporters = new Set();
+let apiSubscriberIds = new Set();
 
-// Helper function to fetch a single file.
+// ... (fetchFile and triggerCleanup functions remain the same) ...
 function fetchFile(url) {
-    return new Promise((resolve) => {
-        if (!url.startsWith('http')) {
-            return resolve('');
-        }
-        https.get(url, (response) => {
-            if (response.statusCode !== 200) {
-                console.error(`Failed to fetch file from ${url}. Status: ${response.statusCode}`);
-                return resolve('');
-            }
-            let rawData = '';
-            response.on('data', (chunk) => { rawData += chunk; });
-            response.on('end', () => resolve(rawData));
-        }).on('error', (error) => {
-            console.error(`Error fetching file from ${url}:`, error);
-            resolve('');
-        });
+    return new Promise((resolve, reject) => {
+        if (!url.startsWith('http')) return resolve('');
+        https.get(url, (res) => {
+            if (res.statusCode !== 200) return reject(new Error(`Status ${res.statusCode}`));
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => resolve(data));
+        }).on('error', reject);
     });
 }
 
-// This function sends the "poke" to the webhook to trigger cleanup.
 function triggerCleanup() {
     return new Promise((resolve) => {
         if (!WEBHOOK_URL.startsWith('http')) {
             return resolve();
-        }
-
+}
         const postData = JSON.stringify({
             user: '182938628643749888',
             type: 'cleanup'
@@ -74,47 +66,52 @@ function triggerCleanup() {
 
 // Main function to fetch both lists and combine them.
 async function fetchSupporterIds() {
-    console.log('[Supporters] Starting supporter list update...');
-    
+    console.log('[Supporters] Fetching patron/voter text lists...');
     triggerCleanup();
 
     try {
-        console.log('[Supporters] Fetching updated patron and voter lists...');
         const [patronData, voterData] = await Promise.all([
             fetchFile(PATRON_LIST_URL),
             fetchFile(VOTER_LIST_URL)
         ]);
 
-        const combinedIds = new Set();
-		const patronList = patronData.split(/\s+/).filter(id => id.length > 0);
-		const voterList = voterData.split(/\s+/).filter(line => line.length > 0);
-		const patronCount = patronList.length;
-		const voterCount = voterList.length;
+        const newSet = new Set();
+        
+        // Process Patrons
+        patronData.split(/\s+/).forEach(id => { if(id) newSet.add(id); });
+        
+        // Process Voters
+        voterData.split(/\s+/).forEach(line => {
+            const userId = line.split(',')[0];
+            if (userId) newSet.add(userId);
+        });
 
-		patronList.forEach(id => combinedIds.add(id));
-		voterList.forEach(line => {
-			const userId = line.split(',')[0];
-			if (userId) combinedIds.add(userId);
-		});
-    
-        // Only replace the list on a successful fetch.
-        supporterIds = combinedIds;
-        console.log(`[Supporters] SUCCESS: Loaded ${patronCount} patrons and ${voterCount} active voters. Total unique supporters: ${supporterIds.size}`);
+        textFileSupporters = newSet;
+        console.log(`[Supporters] Loaded ${textFileSupporters.size} from text files.`);
     } catch (error) {
-        // If any fetch fails, keep the old list and log the error.
-        console.error(`[Supporters] FAILED to fetch lists: ${error.message}. Using cached list of ${supporterIds.size} supporters.`);
+        console.error(`[Supporters] Failed to fetch text lists: ${error.message}`);
     }
 }
 
-
-function isSupporter(userId) {
-    return supporterIds.has(userId);
+// [THE FIX] Allow injecting IDs from Discord Subscriptions
+function setApiSubscribers(idArray) {
+    apiSubscriberIds = new Set(idArray);
+    console.log(`[Supporters] Updated API Subscribers list. Count: ${apiSubscriberIds.size}`);
 }
 
-// [THE DEFINITIVE FIX IS HERE]
-// We are exporting the new function so that other files can access the supporter list.
+// [THE FIX] Check both lists
+function isSupporter(userId) {
+    return textFileSupporters.has(userId) || apiSubscriberIds.has(userId);
+}
+
+// [THE FIX] Return combined list
+function getSupporterSet() {
+    return new Set([...textFileSupporters, ...apiSubscriberIds]);
+}
+
 module.exports = {
     fetchSupporterIds,
+    setApiSubscribers, // Export this new function
     isSupporter,
-    getSupporterSet: () => supporterIds
+    getSupporterSet
 };
