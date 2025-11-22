@@ -54,7 +54,7 @@ module.exports = {
 console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
 
             // 4. Get DB Info
-            const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
+            const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ?").get(message.channel.id);
 console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             if (!sourceChannelInfo) return;
 
