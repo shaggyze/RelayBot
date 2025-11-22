@@ -1,6 +1,6 @@
 {
   "name": "RelayBot",
-  "version": "3.6.6",
+  "version": "3.6.7",
   "description": "A multi-server message relay bot for Discord with @role linking.",
   "main": "index.js",
   "scripts": {

@@ -119,28 +119,77 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
-async function syncGuildSubscriptions(client) {
-    console.log('[Subscriptions] Starting sync of guild subscriptions...');
-    db.prepare('UPDATE guild_subscriptions SET is_active = 0').run();
-    let activeSubs = 0;
-    for (const guild of client.guilds.cache.values()) {
-        try {
-            const entitlements = await client.application.entitlements.fetch({ guildId: guild.id });
-            const activeRelayBotSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
+// events/ready.js
 
-            if (activeRelayBotSub) {
-                const expiresTimestamp = activeRelayBotSub.endsTimestamp;
-                db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)')
-                  .run(guild.id, expiresTimestamp, Date.now());
-                activeSubs++;
-                console.log(`[Subscriptions] Found subscription for guild #${activeSubs} ${guild.name} (${guild.id})`);
+// ... (imports and other functions remain the same) ...
+
+async function syncGuildSubscriptions(client) {
+    console.log('[Subscriptions] Starting global sync of guild subscriptions...');
+    
+    // 1. Reset local cache to ensure we don't have stale data
+    db.prepare('DELETE FROM guild_subscriptions').run();
+
+    try {
+        // 2. Fetch ALL entitlements for the application (Global Fetch)
+        // This gets us everything, including User IDs and Guild IDs
+        const entitlements = await client.application.entitlements.fetch();
+        
+        // Filter for your specific Premium SKU and only Active ones
+        const activeSubs = entitlements.filter(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
+        
+        console.log(`[Subscriptions] API returned ${activeSubs.size} active premium subscriptions.`);
+
+        let processedCount = 0;
+
+        for (const sub of activeSubs.values()) {
+            const guildId = sub.guildId;
+            const userId = sub.userId; // The user who bought it
+            const expiresTimestamp = sub.endsTimestamp;
+
+            if (!guildId) {
+                // This is a User Subscription (not assigned to a guild), which works differently.
+                // If you support User Subs applying to all their owned groups, you'd handle that here.
+                console.log(`[Subscriptions] User ${userId} has a personal subscription (not assigned to a specific guild).`);
+                continue;
             }
-        } catch (error) {
-            console.warn(`[Subscriptions] Failed to fetch entitlements for guild #${activeSubs} ${guild.name} (${guild.id}): ${error.message}`);
+
+            // 3. Match to Group Name (Diagnostic Step)
+            // Check if this guild owns a relay group
+            const groupOwnerInfo = db.prepare('SELECT group_name, group_id FROM relay_groups WHERE owner_guild_id = ?').get(guildId);
+            
+            // Check if this guild is just LINKED to a group (if supporters apply to the group they are in)
+            const linkedInfo = db.prepare('SELECT group_id FROM linked_channels WHERE guild_id = ? LIMIT 1').get(guildId);
+
+            let logMsg = `[Subscriptions] Found Sub: User \`${userId}\` for Guild \`${guildId}\`.`;
+
+            if (groupOwnerInfo) {
+                logMsg += ` -> OWNS Group: "**${groupOwnerInfo.group_name}**" (ID: ${groupOwnerInfo.group_id}).`;
+            } else if (linkedInfo) {
+                // Fetch group name for the linked group
+                const linkedGroupName = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(linkedInfo.group_id)?.group_name;
+                logMsg += ` -> MEMBER of Group: "**${linkedGroupName}**" (ID: ${linkedInfo.group_id}).`;
+            } else {
+                logMsg += ` -> Not currently linked to any relay group.`;
+            }
+
+            console.log(logMsg);
+
+            // 4. Update Database Cache
+            // We store the subscription so messageCreate.js can check it quickly
+            db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)')
+              .run(guildId, expiresTimestamp, Date.now());
+            
+            processedCount++;
         }
+
+        console.log(`[Subscriptions] Sync complete. Cached ${processedCount} active guild subscriptions.`);
+
+    } catch (error) {
+        console.error(`[Subscriptions] CRITICAL ERROR syncing entitlements: ${error.message}`);
     }
-    console.log(`[Subscriptions] Sync complete. Found ${activeSubs} guilds with active subscriptions.`);
 }
+
+// ... (rest of the file: scheduleNextNoonTask, runDbPruning, execute) ...
 
 function scheduleNextNoonTask(client) {
     const now = new Date();
