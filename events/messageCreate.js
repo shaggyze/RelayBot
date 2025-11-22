@@ -58,7 +58,7 @@ console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
             // Extract the ID from the stored URL: .../api/webhooks/123456789/token
             const match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
             const storedWebhookId = match ? match[1] : null;
-
+console.log(`[${executionId}] 1 ${storedWebhookId}`);
             if (storedWebhookId && message.webhookId === storedWebhookId) {
                 return; // STOP: This is a message sent by OUR bot's webhook for this channel.
             }
@@ -66,7 +66,7 @@ console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
 
             // 2. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
             if (!sourceChannelInfo.process_bot_messages & (message.author.bot || message.webhookId)) return;
-console.log(`[${executionId}] 1 ${sourceChannelInfo.process_bot_messages}`);
+console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
