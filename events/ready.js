@@ -9,7 +9,7 @@ const PREMIUM_SKU_ID = '1436488229455925299';
 
 async function primeMemberCache(client) {
     const guilds = Array.from(client.guilds.cache.values());
-    console.log('[Cache] Starting background member cache priming for all #${guilds} guilds...');
+    console.log(`[Cache] Starting background member cache priming for all ${guilds} guilds...`);
     for (const guild of guilds) {
         try {
             console.log(`[Cache] Fetching members for "${guild.name}"...`);
@@ -121,6 +121,7 @@ async function runDailyVoteReminder(client) {
 
 async function syncGuildSubscriptions(client) {
     console.log('[Subscriptions] Starting sync of guild subscriptions...');
+    db.prepare('UPDATE guild_subscriptions SET is_active = 0').run();
     let activeSubs = 0;
     for (const guild of client.guilds.cache.values()) {
         try {
@@ -133,9 +134,6 @@ async function syncGuildSubscriptions(client) {
                   .run(guild.id, expiresTimestamp, Date.now());
                 activeSubs++;
                 console.log(`[Subscriptions] Found subscription for guild #${activeSubs} ${guild.name} (${guild.id})`);
-            } else {
-                db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 0, NULL, ?)')
-                  .run(guild.id, Date.now());
             }
         } catch (error) {
             console.warn(`[Subscriptions] Failed to fetch entitlements for guild #${activeSubs} ${guild.name} (${guild.id}): ${error.message}`);
