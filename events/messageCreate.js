@@ -42,34 +42,34 @@ module.exports = {
         try {
             // 1. Always ignore DMs.
             if (!message.guild) return; 
-            console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
+//console.log(`[${executionId}] content ${message.content} attachments ${message.attachments.size} embeds ${message.embeds.length} stickers ${message.stickers.size}.`);
             if (!message.content && message.attachments.size === 0 && message.embeds.length === 0 && message.stickers.size === 0) return;
 //console.log(`[${executionId}] null`);
 
             // 2. Check Application ID (Catches your specific webhooks AND your bot user)
             if (message.applicationId === message.client.user.id) return;
-            
+
             // 3. Check Author ID (Double check for standard bot messages)
             if (message.author.id === message.client.user.id) return;
 //console.log(`[${executionId}] 0 user ${message.client.user.id} author ${message.author.id} webhook ${message.webhookId}`);
 
             // 4. Get DB Info
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
-//console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
-            if (!sourceChannelInfo) return;
+console.log(`[${executionId}] 0-1 ${sourceChannelInfo}`);
+            //if (!sourceChannelInfo) return;
 
             // 5. [FAILSAFE] Check if the message came from THIS channel's configured webhook
             // This catches self-relays if the Application ID check fails for some reason.
             if (message.webhookId) {
                 const match = sourceChannelInfo.webhook_url.match(/\/webhooks\/(\d+)\//);
                 const storedWebhookId = match ? match[1] : null;
-//console.log(`[${executionId}] 1 ${storedWebhookId}`);
+console.log(`[${executionId}] 1 ${storedWebhookId}`);
                 if (storedWebhookId && message.webhookId === storedWebhookId) return;
             }
 
             // 6. CONDITIONAL IGNORE for ALL OTHER external bots/webhooks.
             if (!sourceChannelInfo.process_bot_messages && (message.author.bot || message.webhookId)) return;
-//console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
+console.log(`[${executionId}] 1-1 ${sourceChannelInfo.process_bot_messages}`);
 
             // --- Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);

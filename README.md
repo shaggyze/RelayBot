@@ -18,6 +18,7 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 - **Full Message Syncing:** Messages, edits, deletes, replies, and attachments are all synced across relayed channels.
 - **Dynamic Role Mapping:** Mention a role in one server, and RelayBot will intelligently ping the correctly mapped role in all other linked servers.
 - **Automatic Role Syncing:** When linking a channel, the bot can automatically create any missing mapped roles and link existing ones by name, ensuring role pings always work (feature is opt-in).
+- **Bot & Webhook Support:** Optionally allow messages from *other* bots and webhooks to be relayed (OFF by default), ideal for bridging feeds.
 - **Granular Deletion Toggles:** Separately control if deleting original messages deletes copies, and if deleting copies deletes the original.
 - **Group Moderation:** Group owners can block abusive users or entire servers from being relayed, giving you full control over your shared space.
 - **Customizable Branding:** Set a custom brand/tag for your server's relayed messages (e.g., `ShaggyZE [S1]`).
@@ -99,9 +100,10 @@ The bot uses **global groups**. One server creates the group, and others link to
 - `/relay toggle_forward_delete`: Toggles if deleting an original message also deletes its copies (ON by default).
 - `/relay toggle_reverse_delete`: Toggles if deleting a relayed copy also deletes the original message (OFF by default).
 - `/relay toggle_auto_role`: Enables/disables automatic role creation and linking for this channel.
+- `/relay toggle_webhook_processing`: Toggles relaying messages from other bots/webhooks.
 
 **Utility:**
-- `/stats`: Shows public activity statistics for your group.
+- `/stats`: Shows public activity statistics for the current channel's group.
 - `/invite`: Get a link to invite the bot to another server.
 - `/version`: Check the bot's current version.
 - `/vote`: Get links to vote for and support the bot.
