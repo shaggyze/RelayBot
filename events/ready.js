@@ -8,15 +8,35 @@ const { uploadDatabase } = require('../utils/backupManager.js');
 const PREMIUM_SKU_ID = '1436488229455925299';
 
 async function primeMemberCache(client) {
+    console.log('[Cache] Starting background member cache priming for all guilds...');
     const guilds = Array.from(client.guilds.cache.values());
-    console.log(`[Cache] Starting background member cache priming for all ${guilds} guilds...`);
+    
     for (const guild of guilds) {
         try {
-            console.log(`[Cache] Fetching members for "${guild.name}"...`);
-            await guild.members.fetch();
-            console.log(`[Cache] Successfully cached members for "${guild.name}".`);
+            // [THE FIX] Added { time: 10000 } (10 seconds) to the fetch.
+            // Default is usually shorter. For a server with 10 people, this is eternity.
+            // We also check if the cache is already full to avoid wasting API calls.
+            if (guild.memberCount === guild.members.cache.size) {
+                // console.log(`[Cache] Members already cached for "${guild.name}".`); 
+                continue;
+            }
+
+            // console.log(`[Cache] Fetching members for "${guild.name}"...`);
+            await guild.members.fetch({ time: 10000 }); 
+            
         } catch (error) {
-            console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). Error: ${error.message}`);
+            // [THE FIX] Specialized retry logic.
+            // If it fails (usually due to a busy bot), try one more time with a longer timeout.
+            if (error.code === 'GuildMembersTimeout') {
+                try {
+                    // console.log(`[Cache] Retry fetching for "${guild.name}"...`);
+                    await guild.members.fetch({ time: 30000 }); // 30 second timeout for retry
+                } catch (retryError) {
+                    console.warn(`[Cache] FAILED retry for "${guild.name}" (${guild.id}): ${retryError.message}`);
+                }
+            } else {
+                console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). Error: ${error.message}`);
+            }
         }
     }
     console.log('[Cache] Background member cache priming complete.');
