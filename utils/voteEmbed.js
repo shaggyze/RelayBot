@@ -23,8 +23,8 @@ function createVoteMessage() {
                 .setEmoji('🗳️'),
             new ButtonBuilder()
                 .setLabel('Get Premium')
-                .setStyle(ButtonStyle.Link)
-                .setURL('https://discord.com/discovery/applications/1397069734469435446/store/1436488229455925299')
+                .setStyle(ButtonStyle.Premium)
+                .setSKUId('1436488229455925299')
                 .setEmoji('⭐')
         );
 
