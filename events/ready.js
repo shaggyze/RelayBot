@@ -3,34 +3,23 @@ const { Events, ActivityType, WebhookClient, ChannelType } = require('discord.js
 const db = require('../db/database.js');
 const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
-const { fetchSupporterIds, isSupporter, getSupporterSet, setApiSubscribers } = require('../utils/supporterManager.js');
+// [FIX] Ensure setApiSubscribers and getSupporterSet are imported
+const { fetchSupporterIds, isSupporter, setApiSubscribers, getSupporterSet } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
+
 const PREMIUM_SKU_ID = '1436488229455925299';
 
 async function primeMemberCache(client) {
     console.log('[Cache] Starting background member cache priming for all guilds...');
     const guilds = Array.from(client.guilds.cache.values());
-    
     for (const guild of guilds) {
         try {
-            // [THE FIX] Added { time: 10000 } (10 seconds) to the fetch.
-            // Default is usually shorter. For a server with 10 people, this is eternity.
-            // We also check if the cache is already full to avoid wasting API calls.
-            if (guild.memberCount === guild.members.cache.size) {
-                // console.log(`[Cache] Members already cached for "${guild.name}".`); 
-                continue;
-            }
-
-            // console.log(`[Cache] Fetching members for "${guild.name}"...`);
-            await guild.members.fetch({ time: 10000 }); 
-            
+            if (guild.memberCount === guild.members.cache.size) continue;
+            await guild.members.fetch({ time: 10000 });
         } catch (error) {
-            // [THE FIX] Specialized retry logic.
-            // If it fails (usually due to a busy bot), try one more time with a longer timeout.
             if (error.code === 'GuildMembersTimeout') {
                 try {
-                    // console.log(`[Cache] Retry fetching for "${guild.name}"...`);
-                    await guild.members.fetch({ time: 30000 }); // 30 second timeout for retry
+                    await guild.members.fetch({ time: 30000 });
                 } catch (retryError) {
                     console.warn(`[Cache] FAILED retry for "${guild.name}" (${guild.id}): ${retryError.message}`);
                 }
@@ -42,177 +31,35 @@ async function primeMemberCache(client) {
     console.log('[Cache] Background member cache priming complete.');
 }
 
-async function runDailyVoteReminder(client) {
-    console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
-    await fetchSupporterIds();
-    const votePayload = createVoteMessage();
-    votePayload.username = 'RelayBot';
-    votePayload.avatarURL = client.user.displayAvatarURL();
-    
-    const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
-    if (allLinkedGuilds.length === 0) {
-        console.log('[Tasks] No linked guilds found. Task finished.');
-        return;
-    }
-
-    console.log(`[Tasks] Checking ${allLinkedGuilds.length} unique server(s) for supporters...`);
-    
-    const guildsWithoutSupporters = new Set();
-
-    for (const guildInfo of allLinkedGuilds) {
-        let hasSupporter = false;
-        let guild;
-
-        try {
-            // [THE FIX] Check Subscription Status FIRST (Faster than fetching members)
-            const subscription = db.prepare('SELECT is_active FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(guildInfo.guild_id);
-            if (subscription) {
-                hasSupporter = true; // Server is subscribed, treat as supporter
-            } else {
-                // No subscription, proceed to check members
-                guild = await client.guilds.fetch(guildInfo.guild_id);
-                if (!guild) {
-                    // Cleanup logic if guild is missing
-                    db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildInfo.guild_id);
-                    db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildInfo.guild_id);
-                    db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildInfo.guild_id);
-                    continue;
-                }
-
-                const members = await guild.members.fetch({ time: 120000 });
-                hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
-                console.log(`[Tasks] [DIAGNOSTIC] Checking Server "${guild.name}": Fetched ${members.size} members. Does it contain a supporter? -> ${hasSupporter}`);
-            }
-
-        } catch (error) {
-            const guildId = guildInfo.guild_id;
-            const guildName = guild ? guild.name : `Unknown Guild (${guildId})`;
-
-            if (error.code === 10004) {
-                console.warn(`[Tasks] [AUTO-CLEANUP] Guild ${guildId} is unknown. Pruning data.`);
-                db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildId);
-                db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildId);
-                db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildId);
-                continue;
-            }
-            
-            if (error.code === 'GuildMembersTimeout') {
-                console.error(`[Tasks] [TIMEOUT] FAILED to fetch members for guild "${guildName}" in time.`);
-            } else {
-                console.error(`[Tasks] [ERROR] FAILED to process guild "${guildName}". Error: ${error.message}`);
-            }
-            
-            hasSupporter = true;
-        }
-
-        if (!hasSupporter) {
-            guildsWithoutSupporters.add(guildInfo.guild_id);
-        } else {
-            const guildName = client.guilds.cache.get(guildInfo.guild_id)?.name ?? `Guild ID ${guildInfo.guild_id}`;
-            console.log(`[Tasks] [SKIP] Server "${guildName}" will be skipped.`);
-        }
-    }
-    
-    if (guildsWithoutSupporters.size === 0) {
-        console.log('[Tasks] All servers have supporters. No reminders to send. Task finished.');
-        return;
-    }
-    
-    const channelsToSendTo = db.prepare(`SELECT channel_id, webhook_url FROM linked_channels WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})`).all();
-
-    console.log(`[Tasks] Sending reminders to ${channelsToSendTo.length} channel(s) across ${guildsWithoutSupporters.size} server(s).`);
-
-    for (const channelInfo of channelsToSendTo) {
-        try {
-            const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
-            await webhookClient.send(votePayload);
-        } catch (error) {
-            const channelName = client.channels.cache.get(channelInfo.channel_id)?.name ?? channelInfo.channel_id;
-            if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
-                console.warn(`[Tasks] [AUTO-CLEANUP] Removing invalid channel/webhook for #${channelName}.`);
-                db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
-            } else {
-                console.error(`[Tasks] [FAIL] An unhandled error occurred while processing channel #${channelName}:`, error);
-            }
-        }
-    }
-    console.log('[Tasks] Daily vote reminder task finished.');
-}
-
-async function syncGuildSubscriptions(client) {
-    console.log('[Subscriptions] Starting global sync of guild subscriptions...');
-    
-    try {
-        // 1. [THE FIX] Fetch from API *BEFORE* touching the database.
-        // This prevents the table from being empty while waiting for the network.
-        const entitlements = await client.application.entitlements.fetch();
-        
-        // Filter for your specific Premium SKU and only Active ones
-        const activeSubs = entitlements.filter(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
-        
-        console.log(`[Subscriptions] API returned ${activeSubs.size} active premium subscriptions.`);
-
-        // 2. [THE FIX] Use a Transaction to update the DB atomically.
-        // This ensures that from the perspective of messageCreate.js, 
-        // the data switches from "Old State" to "New State" instantly, with no empty gap.
-        const updateSubscriptionDb = db.transaction((subs) => {
-            // Clear the old cache safely within the transaction
-            db.prepare('DELETE FROM guild_subscriptions').run();
-
-            let processedCount = 0;
-            const insertStmt = db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)');
-
-            for (const sub of subs.values()) {
-                const guildId = sub.guildId;
-                // Only handle Guild subscriptions here
-                if (guildId) {
-                    insertStmt.run(guildId, sub.endsTimestamp, Date.now());
-                    processedCount++;
-                }
-                console.log(`[Subscriptions] Synced. Users: ${subscriberUserIds.length}, Guilds: ${subscriberGuildIds.length}`);
-            }
-            return processedCount;
-        });
-
-        // Execute the transaction
-        const processedCount = updateSubscriptionDb(activeSubs);
-        
-        console.log(`[Subscriptions] Sync complete. Cached ${processedCount} active guild subscriptions.`);
-
-    } catch (error) {
-        console.error(`[Subscriptions] CRITICAL ERROR syncing entitlements: ${error.message}`);
-    }
-}
-
 // --- [NEW] Dev Server Role Manager ---
 async function manageDevServerRole(client) {
-    const devGuildId = process.env.DEV_GUILD_ID; // Ensure this is in your .env
+    const devGuildId = process.env.DEV_GUILD_ID; 
     if (!devGuildId) return;
 
     try {
-        const guild = await client.guilds.fetch(devGuildId);
+        const guild = await client.guilds.fetch(devGuildId).catch(() => null);
         if (!guild) return;
 
-        // A. Ensure Role Exists
         let role = guild.roles.cache.find(r => r.name === 'Supporter');
         if (!role) {
-            console.log('[Role-Sync] "Supporter" role not found. Creating it...');
-            role = await guild.roles.create({
-                name: 'Supporter',
-                color: '#FFD700', // Gold
-                hoist: true,      // Display separately
-                mentionable: true,
-                reason: 'Auto-created for RelayBot Premium Subscribers'
-            });
+            console.log('[Role-Sync] "Supporter" role not found in Dev server. Creating it...');
+            try {
+                role = await guild.roles.create({
+                    name: 'Supporter',
+                    color: '#FFD700',
+                    hoist: true,
+                    mentionable: true,
+                    reason: 'Auto-created for RelayBot Premium Subscribers'
+                });
+            } catch (e) {
+                console.error('[Role-Sync] Failed to create role:', e.message);
+                return;
+            }
         }
 
-        // B. Get all Supporters (Text File + API Subs)
         const allSupporters = getSupporterSet();
+        const members = await guild.members.fetch();
 
-        // C. Fetch all members of Dev Guild to ensure cache is fresh
-        const members = await guild.members.fetch({ time: 30000 });
-        
-        // D. Loop Members: Grant or Revoke
         for (const [memberId, member] of members) {
             if (member.user.bot) continue;
 
@@ -220,18 +67,132 @@ async function manageDevServerRole(client) {
             const shouldHaveRole = allSupporters.has(memberId);
 
             if (shouldHaveRole && !hasRole) {
-                await member.roles.add(role);
+                await member.roles.add(role).catch(e => console.error(`Failed to add role to ${member.user.tag}:`, e.message));
                 console.log(`[Role-Sync] Granted Role to ${member.user.tag}`);
             } 
             else if (!shouldHaveRole && hasRole) {
-                await member.roles.remove(role);
-                console.log(`[Role-Sync] Revoked Role from ${member.user.tag} (No longer a supporter)`);
+                await member.roles.remove(role).catch(e => console.error(`Failed to remove role from ${member.user.tag}:`, e.message));
+                console.log(`[Role-Sync] Revoked Role from ${member.user.tag}`);
             }
         }
-
     } catch (error) {
         console.error(`[Role-Sync] Error managing Dev Guild roles: ${error.message}`);
     }
+}
+
+// --- [FIXED] Combined Subscription Logic ---
+async function syncGlobalSubscriptions(client) {
+    console.log('[Subscriptions] Starting global sync...');
+    
+    try {
+        // 1. Fetch ALL entitlements
+        const entitlements = await client.application.entitlements.fetch();
+        
+        // 2. Filter for Active + Your SKU. IMPORTANT: Use .isActive()
+        const activeSubs = entitlements.filter(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
+        
+        const subscriberUserIds = [];
+        
+        // 3. Transaction to update Guild DB safely
+        const updateSubscriptionDb = db.transaction((subs) => {
+            db.prepare('DELETE FROM guild_subscriptions').run();
+            const insertStmt = db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)');
+            
+            let guildCount = 0;
+            for (const sub of subs.values()) {
+                if (sub.guildId) {
+                    insertStmt.run(sub.guildId, sub.endsTimestamp, Date.now());
+                    guildCount++;
+                }
+                if (sub.userId) {
+                    subscriberUserIds.push(sub.userId);
+                }
+            }
+            return guildCount;
+        });
+
+        const processedGuilds = updateSubscriptionDb(activeSubs);
+        
+        // 4. Update Supporter Manager with User IDs
+        setApiSubscribers(subscriberUserIds);
+
+        console.log(`[Subscriptions] Synced. Active Guilds: ${processedGuilds}, Active Users: ${subscriberUserIds.length}`);
+
+        // 5. Handle Dev Server Role Logic
+        await manageDevServerRole(client);
+
+    } catch (error) {
+        console.error(`[Subscriptions] Critical Error: ${error.message}`);
+    }
+}
+
+async function runDailyVoteReminder(client) {
+    console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
+    await fetchSupporterIds();
+    
+    const votePayload = createVoteMessage();
+    votePayload.username = 'RelayBot';
+    votePayload.avatarURL = client.user.displayAvatarURL();
+    
+    const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
+    if (allLinkedGuilds.length === 0) return;
+
+    console.log(`[Tasks] Checking ${allLinkedGuilds.length} unique server(s) for supporters...`);
+    
+    const guildsWithoutSupporters = new Set();
+
+    for (const guildInfo of allLinkedGuilds) {
+        let hasSupporter = false;
+        
+        // Check DB Subscription first
+        const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(guildInfo.guild_id);
+        if (subscription) {
+            hasSupporter = true;
+        } else {
+            try {
+                const guild = await client.guilds.fetch(guildInfo.guild_id);
+                if (!guild) {
+                    // Cleanup deleted guilds
+                    db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildInfo.guild_id);
+                    db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildInfo.guild_id);
+                    db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildInfo.guild_id);
+                    continue;
+                }
+                // Check cache first for supporters
+                const supporterSet = getSupporterSet();
+                if (guild.members.cache.some(m => supporterSet.has(m.id))) {
+                    hasSupporter = true;
+                } else {
+                     // Only fetch if cache check fails
+                    const members = await guild.members.fetch({ time: 120000 });
+                    hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
+                }
+            } catch (error) {
+                // If error (timeout/network), assume supporter to be safe and avoid spamming
+                hasSupporter = true; 
+            }
+        }
+
+        if (!hasSupporter) {
+            guildsWithoutSupporters.add(guildInfo.guild_id);
+        }
+    }
+    
+    if (guildsWithoutSupporters.size === 0) return;
+    
+    const channelsToSendTo = db.prepare(`SELECT channel_id, webhook_url FROM linked_channels WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})`).all();
+
+    for (const channelInfo of channelsToSendTo) {
+        try {
+            const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
+            await webhookClient.send(votePayload);
+        } catch (error) {
+            if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
+                db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
+            }
+        }
+    }
+    console.log('[Tasks] Daily vote reminder task finished.');
 }
 
 function scheduleNextNoonTask(client) {
@@ -247,8 +208,7 @@ function scheduleNextNoonTask(client) {
 
     const delay = nextRun.getTime() - now.getTime();
     console.log(`[Scheduler] Next daily vote reminder scheduled for: ${nextRun.toUTCString()}`);
-    console.log(`[Scheduler] Will run in ${(delay / 1000 / 60 / 60).toFixed(2)} hours.`);
-
+    
     setTimeout(() => {
         runDailyVoteReminder(client);
         scheduleNextNoonTask(client);
@@ -259,10 +219,7 @@ function runDbPruning() {
     console.log('[DB-Prune] Starting daily database pruning task...');
     try {
         const pruneDays = parseInt(process.env.DB_PRUNE_DAYS, 10) || 7;
-        if (pruneDays <= 0) {
-            console.log('[DB-Prune] Pruning is disabled (DB_PRUNE_DAYS <= 0).');
-            return;
-        }
+        if (pruneDays <= 0) return;
 
         const cutoffDate = new Date();
         cutoffDate.setDate(cutoffDate.getDate() - pruneDays);
@@ -287,23 +244,26 @@ module.exports = {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Watching });
 
-        // --- Non-blocking startup tasks (run in the background without await) ---
-        primeMemberCache(client);
-        fetchSupporterIds();
-        
-        syncGlobalSubscriptions(client);
+        // 1. Await Member Cache (Fixes startup race condition)
+        await primeMemberCache(client);
 
-        // --- Scheduled Tasks ---
-        const thirtyInMs = 30 * 60 * 1000;
+        // 2. Await Initial Supporter Fetch (Fixes rate limit bugs)
+        await fetchSupporterIds();
+
+        // 3. Await Initial Subscription/Dev Role Sync (Fixes premium features)
+        // [THE FIX] This defines the function call that was missing/undefined in your error
+        await syncGlobalSubscriptions(client);
+
         const oneHourInMs = 60 * 60 * 1000;
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
-        // Hourly supporter fetch
-        setInterval(fetchSupporterIds, thirtyInMs);
+        // Scheduled Tasks
+        setInterval(fetchSupporterIds, oneHourInMs);
         
-        // Message cleanup (every 15 minutes)
+        // Run sync periodically
+        setInterval(() => syncGlobalSubscriptions(client), oneHourInMs);
+
         setInterval(() => {
-            console.log('[Tasks] Running scheduled message cleanup...');
             const channelsToClean = db.prepare('SELECT channel_id, delete_delay_hours FROM linked_channels WHERE delete_delay_hours > 0').all();
             for (const item of channelsToClean) {
                 const delayMs = item.delete_delay_hours * 60 * 60 * 1000;
@@ -319,17 +279,12 @@ module.exports = {
             }
         }, 15 * 60 * 1000);
 
-        // Daily Subscription Sync
-        setInterval(() => syncGlobalSubscriptions(client), thirtyInMs);
-
-        // Daily Vote Reminder
         scheduleNextNoonTask(client);
 
-        // --- Precisely Timed Daily Tasks (Pruning & Backups) ---
         const scheduleDailyTasks = () => {
             const now = new Date();
             const nextRun = new Date();
-            nextRun.setUTCHours(2, 0, 0, 0); // Set a specific time, e.g., 2:00 AM UTC
+            nextRun.setUTCHours(2, 0, 0, 0); 
             if (now > nextRun) {
                 nextRun.setDate(nextRun.getDate() + 1);
             }
@@ -338,14 +293,12 @@ module.exports = {
             console.log(`[Scheduler] Next daily backup & pruning check scheduled in ${(initialDelay / 1000 / 60 / 60).toFixed(2)} hours.`);
 
             setTimeout(() => {
-                // Run tasks for the first time
                 runDbPruning();
-                if (new Date().getDay() === 0) { // Check if it's Sunday
+                if (new Date().getDay() === 0) { 
                     console.log('[SCHEDULE] Today is Sunday. Attempting automated database backup...');
                     uploadDatabase().catch(error => console.error('[SCHEDULE] Automated backup failed:', error.message));
                 }
 
-                // Schedule them to run every 24 hours thereafter
                 setInterval(runDbPruning, twentyFourHoursInMs);
                 setInterval(() => {
                     if (new Date().getDay() === 0) {

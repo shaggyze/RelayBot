@@ -43,7 +43,7 @@ const client = new Client({
 });
 
 // Log every debug message from discord.js
-client.on('debug', console.log);
+//client.on('debug', console.log);
 // Log any warnings
 client.on('warn', console.log);
 // Log any general errors
