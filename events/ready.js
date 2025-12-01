@@ -139,46 +139,48 @@ async function runDailyVoteReminder(client) {
     console.log('[Tasks] Daily vote reminder task finished.');
 }
 
-// --- [NEW] Sync Subscriptions & Manage Role ---
-async function syncGlobalSubscriptions(client) {
-    console.log('[Subscriptions] Starting global sync...');
+async function syncGuildSubscriptions(client) {
+    console.log('[Subscriptions] Starting global sync of guild subscriptions...');
     
     try {
-        // 1. Fetch ALL entitlements
+        // 1. [THE FIX] Fetch from API *BEFORE* touching the database.
+        // This prevents the table from being empty while waiting for the network.
         const entitlements = await client.application.entitlements.fetch();
         
-        // 2. Filter for Active + Your SKU
+        // Filter for your specific Premium SKU and only Active ones
         const activeSubs = entitlements.filter(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
         
-        const subscriberUserIds = [];
-        const subscriberGuildIds = []; // For direct guild subs (rare but possible)
+        console.log(`[Subscriptions] API returned ${activeSubs.size} active premium subscriptions.`);
 
-        activeSubs.forEach(sub => {
-            if (sub.userId) subscriberUserIds.push(sub.userId);
-            if (sub.guildId) subscriberGuildIds.push(sub.guildId);
+        // 2. [THE FIX] Use a Transaction to update the DB atomically.
+        // This ensures that from the perspective of messageCreate.js, 
+        // the data switches from "Old State" to "New State" instantly, with no empty gap.
+        const updateSubscriptionDb = db.transaction((subs) => {
+            // Clear the old cache safely within the transaction
+            db.prepare('DELETE FROM guild_subscriptions').run();
+
+            let processedCount = 0;
+            const insertStmt = db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)');
+
+            for (const sub of subs.values()) {
+                const guildId = sub.guildId;
+                // Only handle Guild subscriptions here
+                if (guildId) {
+                    insertStmt.run(guildId, sub.endsTimestamp, Date.now());
+                    processedCount++;
+                }
+                console.log(`[Subscriptions] Synced. Users: ${subscriberUserIds.length}, Guilds: ${subscriberGuildIds.length}`);
+            }
+            return processedCount;
         });
 
-        // 3. Send User IDs to SupporterManager
-        // This makes isSupporter(id) return true for them, which enables rate-limit bypass
-        // in ANY guild they are currently in (handled by messageCreate.js logic).
-        setApiSubscribers(subscriberUserIds);
-
-        // 4. Update Database for Direct Guild Subs (if any)
-        db.prepare('UPDATE guild_subscriptions SET is_active = 0').run(); // Reset
+        // Execute the transaction
+        const processedCount = updateSubscriptionDb(activeSubs);
         
-        for (const gId of subscriberGuildIds) {
-            // We use a dummy timestamp for now or extract from entitlement if needed
-            db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, updated_at) VALUES (?, 1, ?)')
-              .run(gId, Date.now());
-        }
-
-        console.log(`[Subscriptions] Synced. Users: ${subscriberUserIds.length}, Guilds: ${subscriberGuildIds.length}`);
-
-        // 5. Handle Dev Server Role Logic
-        await manageDevServerRole(client);
+        console.log(`[Subscriptions] Sync complete. Cached ${processedCount} active guild subscriptions.`);
 
     } catch (error) {
-        console.error(`[Subscriptions] Critical Error: ${error.message}`);
+        console.error(`[Subscriptions] CRITICAL ERROR syncing entitlements: ${error.message}`);
     }
 }
 
@@ -208,8 +210,8 @@ async function manageDevServerRole(client) {
         const allSupporters = getSupporterSet();
 
         // C. Fetch all members of Dev Guild to ensure cache is fresh
-        const members = await guild.members.fetch();
-
+        const members = await guild.members.fetch({ time: 30000 });
+        
         // D. Loop Members: Grant or Revoke
         for (const [memberId, member] of members) {
             if (member.user.bot) continue;

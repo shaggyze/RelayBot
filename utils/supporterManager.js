@@ -86,8 +86,13 @@ async function fetchSupporterIds() {
             if (userId) newSet.add(userId);
         });
 
-        textFileSupporters = newSet;
-        console.log(`[Supporters] Loaded ${textFileSupporters.size} from text files.`);
+        if (newSet.size > 0) {
+            textFileSupporters = newSet;
+            console.log(`[Supporters] Loaded ${textFileSupporters.size} from text files.`);
+        } else {
+            console.warn(`[Supporters] Fetched lists were empty. Keeping existing ${textFileSupporters.size} supporters in cache to be safe.`);
+        }
+
     } catch (error) {
         console.error(`[Supporters] Failed to fetch text lists: ${error.message}`);
     }

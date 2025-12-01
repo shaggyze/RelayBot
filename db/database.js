@@ -18,6 +18,7 @@ if (fs.existsSync(volumePath)) {
 
 console.log(`[DB] Using database at path: ${dbPath}`);
 const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
 db.pragma('integer_bigint = true');
 
 // --- MIGRATIONS ---

@@ -59,16 +59,16 @@ module.exports = {
         try {
             if (subcommand === 'help') {
                 const helpEmbed = new EmbedBuilder().setTitle('How to Set Up the Relay Bot').setColor('#5865F2').setDescription('Follow these steps to connect channels across different servers using global groups.').addFields({ name: 'Step 1: Create a GLOBAL Group (On ONE Server Only)', value: 'One server must create the "global" group. The name must be unique across all servers using this bot.\n`Ex: /relay create_group name: my-super-unique-alliance`' }, { name: 'Step 2: Link Channels (On ALL Servers)', value: 'Admins on all participating servers can now link their channels to the *same* global group by name.\n`Ex: /relay link_channel group_name: my-super-unique-alliance direction: Both Ways`' }, { name: 'Step 3: Map Roles (Optional)', value: 'To sync role pings, map your server\'s roles to a shared "common name" within that group.\n`Ex: /relay map_role group_name: my-super-unique-alliance common_name: K30-31 role: @Kingdom-30-31`' }, { name: 'Step 4: Managing Your Setup', value: '• `/relay list_servers`: See all servers in a group.\n' + '• `/relay list_mappings`: See all role mappings for a group.\n' + '• `/relay kick_server`: Forcibly remove a server from a group you own.\n' + '• `/relay delete_group`: Deletes a global group (owner only).\n' + '• `/relay toggle_forward_delete`: Toggle if deleting an original message also deletes its copies.\n' + '• `/relay toggle_reverse_delete`: Toggle if deleting a relayed message deletes the original.\n' + '• `/relay unlink_channel`: Removes only this channel from a relay.\n' + '• `/relay unmap_role`: Removes a role mapping.\n' + '• `/relay set_direction`: Sets the direction of a channel.\n' + '• `/relay set_brand`: Sets a custom server brand.\n' + '• `/relay set_delete_delay`: Sets message auto-delete delay.\n' + '• `/relay toggle_auto_role`: Toggles auto-role syncing.\n' + '• `/version`, `/invite` & `/vote` : Get bot info.' }).setFooter({ text: `RelayBot v${require('../package.json').version}` });
-                await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+                await interaction.deferReply({ embeds: [helpEmbed], ephemeral: true });
 
             } else if (subcommand === 'create_group') {
                 const groupName = interaction.options.getString('name');
                 try {
                     db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id) VALUES (?, ?)').run(groupName, guildId);
-                    await interaction.reply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.`, ephemeral: true });
+                    await interaction.deferReply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.`, ephemeral: true });
                 } catch (error) {
                     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                        await interaction.reply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.`, ephemeral: true });
+                        await interaction.deferReply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.`, ephemeral: true });
                     } else { throw error; }
                 }
 
