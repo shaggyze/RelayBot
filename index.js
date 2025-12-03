@@ -113,9 +113,8 @@ console.log(`[DEBUG] Successfully loaded ${eventFiles.length} events.`);
 try {
 console.log('[DEBUG] Attempting to log in...');
 client.login(process.env.DISCORD_TOKEN);
+console.log('[DEBUG] index.js has finished executing. Awaiting login confirmation from the "ready" event...');
 } catch (error) {
     console.error('[FATAL-CRASH] The application crashed during the client.login() call.', error);
     process.exit(1);
 }
-
-console.log('[DEBUG] index.js has finished executing. Awaiting login confirmation from the "ready" event...');
