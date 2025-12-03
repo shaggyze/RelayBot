@@ -109,12 +109,52 @@ for (const file of eventFiles) {
     }
 }
 console.log(`[DEBUG] Successfully loaded ${eventFiles.length} events.`);
-
-try {
-console.log('[DEBUG] Attempting to log in...');
-client.login(process.env.DISCORD_TOKEN);
-console.log('[DEBUG] index.js has finished executing. Awaiting login confirmation from the "ready" event...');
 } catch (error) {
-    console.error('[FATAL-CRASH] The application crashed during the client.login() call.', error);
+    console.error('[FATAL-CRASH] The application crashed while loading events or logging in.', error);
     process.exit(1);
 }
+
+// [THE FIX] Robust Login with Retry System & Ban Detection
+const loginWithRetry = async () => {
+    try {
+        console.log('[DEBUG] Attempting to log in...');
+        await client.login(process.env.DISCORD_TOKEN);
+        console.log('[DEBUG] Login call completed. Waiting for "Ready" event...');
+    } catch (error) {
+        console.error('[LOGIN-FATAL] Login failed:', error.message);
+
+        // --- [NEW] Ban/Rate Limit Detection ---
+        // Check for common signs of a Discord 429 ban
+        const isRateLimit = 
+            error.message.includes('429') || 
+            error.message.includes('Too Many Requests') || 
+            (error.rawError && error.rawError.code === 429) ||
+            error.status === 429;
+
+        if (isRateLimit) {
+            console.error('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+            console.error('[BAN CONFIRMED] 🚨 A 429 RATE LIMIT WAS DETECTED DURING LOGIN.');
+            console.error('This usually means the IP is temporarily banned by Cloudflare.');
+            console.error('Initiating 15-minute cooldown to allow the ban to expire.');
+            console.error('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n');
+        } else {
+            console.warn('[LOGIN-WARNING] Login failed for a reason other than explicit 429.');
+            console.warn('Waiting 15 minutes regardless, to be safe and prevent restart loops.');
+        }
+        
+        // 15 Minutes = 15 * 60 * 1000 = 900,000 ms
+        const retryDelay = 15 * 60 * 1000; 
+        
+        console.warn(`[LOGIN-RETRY] Bot will sleep for 15 minutes.`);
+        console.warn(`[LOGIN-RETRY] Next login attempt: ${new Date(Date.now() + retryDelay).toLocaleTimeString()}`);
+
+        // Use setTimeout to retry recursively without crashing the process
+        setTimeout(() => {
+            console.log('[LOGIN-RETRY] Waking up! Trying to log in again...');
+            loginWithRetry();
+        }, retryDelay);
+    }
+};
+
+// Start the login process
+loginWithRetry();
