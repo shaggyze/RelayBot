@@ -110,13 +110,6 @@ for (const file of eventFiles) {
 }
 console.log(`[DEBUG] Successfully loaded ${eventFiles.length} events.`);
 
-console.log('[DEBUG] Attempting to log in...');
-client.login(process.env.DISCORD_TOKEN);
-} catch (error) {
-    console.error('[FATAL-CRASH] The application crashed while loading events.', error);
-    process.exit(1);
-}
-
 try {
 console.log('[DEBUG] Attempting to log in...');
 client.login(process.env.DISCORD_TOKEN);

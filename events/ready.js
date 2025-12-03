@@ -58,7 +58,7 @@ async function manageDevServerRole(client) {
         }
 
         const allSupporters = getSupporterSet();
-        const members = await guild.members.fetch();
+        const members = await guild.members.fetch({ time: 10000 });
 
         for (const [memberId, member] of members) {
             if (member.user.bot) continue;
