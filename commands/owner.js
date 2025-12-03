@@ -3,7 +3,7 @@ const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('disc
 const { exec } = require('child_process');
 const db = require('../db/database.js');
 const { getRateLimitDayString } = require('../utils/time.js');
-const { isSupporter, getSupporterSet } = require('../utils/supporterManager.js'); 
+const { isSupporter, getSupporterSet } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
 
 const BOT_OWNER_ID = '182938628643749888';
@@ -21,9 +21,18 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('upload_db').setDescription('Uploads the database to your secure web server endpoint.'))
         .addSubcommand(subcommand => subcommand.setName('leave_inactive').setDescription('Leaves servers that have had no relay activity for a specified time.').addIntegerOption(option => option.setName('days_inactive').setDescription('The number of days a server must be inactive to be considered for leaving.').setRequired(true)).addBooleanOption(option => option.setName('dry_run').setDescription('If true, will only list servers to leave without actually leaving. (Default: True)')))
         .addSubcommand(subcommand => subcommand.setName('rename_group').setDescription('[DANGER] Forcibly renames a global group.').addStringOption(option => option.setName('current_name').setDescription('The current name of the group you want to rename.').setRequired(true).setAutocomplete(true)).addStringOption(option => option.setName('new_name').setDescription('The new, unique name for the group.').setRequired(true)).addStringOption(option => option.setName('reason').setDescription('An optional reason for the name change to send to server owners.')))
-        .addSubcommand(subcommand => subcommand.setName('check_subscription').setDescription('Manually checks the subscription status for a specific server.').addStringOption(option => option.setName('server_id').setDescription('The ID of the server to check.').setRequired(true)))
         
-        // --- [NEW SUBCOMMAND] ---
+        // --- [UPDATED SUBCOMMAND] Uses group_name with autocomplete ---
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('check_subscription')
+                .setDescription('Checks the subscription status for the server that owns a specific group.')
+                .addStringOption(option =>
+                    option.setName('group_name')
+                        .setDescription('The name of the group to check.')
+                        .setRequired(true)
+                        .setAutocomplete(true)))
+        
         .addSubcommand(subcommand => 
             subcommand.setName('stats')
                 .setDescription('View stats for ANY group by name.')
@@ -39,7 +48,6 @@ module.exports = {
 
         try {
             if (subcommand === 'list_groups') {
-                // ... (existing list_groups logic) ...
                 await interaction.deferReply({ ephemeral: true });
                 const allGroups = db.prepare(`SELECT rg.group_id, rg.group_name, rg.owner_guild_id, SUM(gs.character_count) as total_chars, COUNT(DISTINCT gs.day) as active_days, MAX(gs.day) as last_active_day FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id ORDER BY rg.group_name ASC`).all();
                 if (allGroups.length === 0) return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
@@ -89,7 +97,6 @@ module.exports = {
                 for (let i = 1; i < embeds.length; i++) await interaction.followUp({ embeds: [embeds[i]], ephemeral: true });
 
             } else if (subcommand === 'delete_group') {
-                // ... (existing delete_group logic) ...
                 await interaction.deferReply({ ephemeral: true });
                 const groupName = interaction.options.getString('name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
@@ -98,7 +105,6 @@ module.exports = {
                 await interaction.editReply({ content: `✅ Successfully deleted global group "**${groupName}**" and all of its associated data.` });
 
             } else if (subcommand === 'prune_db') {
-                 // ... (existing prune_db logic) ...
                 await interaction.deferReply({ ephemeral: true });
                 const includeInactive = interaction.options.getBoolean('include_inactive') ?? false;
                 const inactiveGroupDays = interaction.options.getInteger('days');
@@ -190,7 +196,6 @@ module.exports = {
                 } catch (vacuumError) { await interaction.editReply({ content: 'Pruning complete, but VACUUM failed.' }); }
 
             } else if (subcommand === 'upload_db') {
-                // ... (existing upload_db logic) ...
                 await interaction.deferReply({ ephemeral: true });
                 try {
                     const response = await uploadDatabase();
@@ -199,8 +204,7 @@ module.exports = {
                 } catch (error) { await interaction.editReply({ content: `❌ **Upload Failed:** ${error.message}` }); }
 
             } else if (subcommand === 'leave_inactive') {
-                // ... (existing leave_inactive logic) ...
-                 await interaction.deferReply({ ephemeral: true });
+                await interaction.deferReply({ ephemeral: true });
                 const daysInactive = interaction.options.getInteger('days_inactive');
                 const isDryRun = interaction.options.getBoolean('dry_run') ?? true; 
                 if (daysInactive <= 0) return interaction.editReply({ content: '❌ Please provide a positive number of days.' });
@@ -217,24 +221,30 @@ module.exports = {
                     const embed = new EmbedBuilder().setTitle(`Dry Run: Inactive Servers to Leave (${inactiveGuilds.length})`).setColor('#FFA500').setDescription(`The following servers have had no relay activity in the last **${daysInactive}** days:\n\n${serverList}${extraText}`).setFooter({ text: 'To proceed, run this command again with the `dry_run` option set to `False`.' });
                     return interaction.editReply({ embeds: [embed] });
                 } else {
-                    let successCount = 0; let failCount = 0; const failedGuilds = [];
+                    let successCount = 0; let failCount = 0; let dbCleanupCount = 0; const failedGuilds = [];
                     await interaction.editReply({ content: `Leaving ${inactiveGuilds.length} inactive servers... This may take a moment.` });
                     for (const guild of inactiveGuilds) {
                         await sleep(1000); 
-                        try { await guild.leave(); successCount++; } catch (error) { console.error(`[INACTIVE-LEAVE] FAILED to leave guild: ${guild.name} (${guild.id}). Error: ${error.message}`); failCount++; if (failedGuilds.length < 10) failedGuilds.push(`• ${guild.name} (\`${guild.id}\`)`); }
+                        try {
+                            await guild.leave(); console.log(`[INACTIVE-LEAVE] Successfully left guild: ${guild.name} (${guild.id})`); successCount++;
+                            const links = db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guild.id);
+                            const roles = db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guild.id);
+                            const subs = db.prepare('DELETE FROM guild_subscriptions WHERE guild_id = ?').run(guild.id);
+                            const groups = db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guild.id);
+                            if (links.changes > 0 || roles.changes > 0 || groups.changes > 0) dbCleanupCount++;
+                        } catch (error) { console.error(`[INACTIVE-LEAVE] FAILED to leave guild: ${guild.name} (${guild.id}). Error: ${error.message}`); failCount++; if (failedGuilds.length < 10) failedGuilds.push(`• ${guild.name} (\`${guild.id}\`)`); }
                     }
-                    const embed = new EmbedBuilder().setTitle('Inactive Server Cleanup Complete').setColor('#5865F2').setDescription(`Operation finished.`).addFields({ name: 'Servers Left Successfully', value: `${successCount}`, inline: true }, { name: 'Failed to Leave', value: `${failCount}`, inline: true });
+                    const embed = new EmbedBuilder().setTitle('Inactive Server Cleanup Complete').setColor('#5865F2').setDescription(`Operation finished.`).addFields({ name: 'Servers Left', value: `${successCount}`, inline: true }, { name: 'DB Records Cleaned', value: `${dbCleanupCount} Servers`, inline: true }, { name: 'Failed to Leave', value: `${failCount}`, inline: true });
                     if (failCount > 0) { embed.addFields({ name: 'Failed Servers (Sample)', value: failedGuilds.join('\n') }); }
                     return interaction.editReply({ content: '', embeds: [embed] });
                 }
 
             } else if (subcommand === 'rename_group') {
-                 // ... (existing rename_group logic) ...
-                 await interaction.deferReply({ ephemeral: true });
+                await interaction.deferReply({ ephemeral: true });
                 const currentName = interaction.options.getString('current_name');
                 const newName = interaction.options.getString('new_name');
                 const reason = interaction.options.getString('reason'); 
-                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(currentName);
+                const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(currentName);
                 if (!group) return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${currentName}".` });
                 const linkedGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(group.group_id).map(row => row.guild_id);
                 const ownerNotificationMap = new Map();
@@ -271,34 +281,72 @@ module.exports = {
                     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') { await interaction.editReply({ content: `❌ **Error:** A global group named "**${newName}**" already exists. Please choose a different name.` }); } else { throw error; }
                 }
 
+            // --- [UPDATED SUBCOMMAND] Logic ---
             } else if (subcommand === 'check_subscription') {
-                // ... (existing check_subscription logic) ...
                 await interaction.deferReply({ ephemeral: true });
-                const guildId = interaction.options.getString('server_id');
+                
+                // [THE FIX] Get the group name
+                const groupName = interaction.options.getString('group_name');
+
+                // 1. Look up the group
+                const group = db.prepare('SELECT group_id, owner_guild_id, group_name FROM relay_groups WHERE group_name = ?').get(groupName);
+
+                if (!group) {
+                    return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "**${groupName}**".` });
+                }
+
+                const guildId = group.owner_guild_id;
+
+                // 2. Fetch the guild (Owner's Server)
                 const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
-                if (!guild) return interaction.editReply({ content: `❌ **Error:** I am not a member of the server with ID \`${guildId}\`.` });
+                
+                if (!guild) {
+                    return interaction.editReply({ content: `❌ **Error:** I am not a member of the group owner's server (ID: \`${guildId}\`). I cannot check their entitlements.` });
+                }
+
                 try {
                     const entitlements = await interaction.client.application.entitlements.fetch({ guildId: guild.id });
                     const activeSub = entitlements.find(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
                     const dbSub = db.prepare('SELECT * FROM guild_subscriptions WHERE guild_id = ?').get(guild.id);
-                    const embed = new EmbedBuilder().setTitle(`Subscription Status for ${guild.name}`).setColor(activeSub ? '#23A559' : '#ED4245').addFields({ name: 'Server ID', value: `\`${guild.id}\`` });
+                    
+                    const embed = new EmbedBuilder()
+                        .setTitle(`Subscription Status for Group: ${group.group_name}`)
+                        .setDescription(`**Owner Server:** ${guild.name} (ID: \`${guild.id}\`)`)
+                        .setColor(activeSub ? '#23A559' : '#ED4245');
+
                     if (activeSub) {
                         const typeStr = activeSub.type === 8 ? 'TEST ENTITLEMENT' : 'Real Subscription';
-                        embed.addFields({ name: 'Live API Status', value: '✅ Active Subscription Found' }, { name: 'Entitlement Type', value: `**${typeStr}** (Type: ${activeSub.type})` }, { name: 'Created', value: `<t:${Math.floor(activeSub.createdTimestamp / 1000)}:R>`, inline: true }, { name: 'Ends/Renews', value: activeSub.endsTimestamp ? `<t:${Math.floor(activeSub.endsTimestamp / 1000)}:R>` : 'Never', inline: true }, { name: 'Entitlement ID', value: `\`${activeSub.id}\``, inline: false });
-                    } else { embed.addFields({ name: 'Live API Status', value: '❌ No active subscription found.' }); }
-                    if (dbSub) { embed.addFields({ name: 'Database Cache Status', value: dbSub.is_active ? '✅ Active' : '❌ Inactive' }, { name: 'Last Synced', value: `<t:${Math.floor(dbSub.updated_at / 1000)}:R>`, inline: true }); } else { embed.addFields({ name: 'Database Cache Status', value: '🤔 No record found.' }); }
+                        embed.addFields(
+                            { name: 'Live API Status', value: '✅ Active Subscription Found' },
+                            { name: 'Entitlement Type', value: `**${typeStr}** (Type: ${activeSub.type})` },
+                            { name: 'Created', value: `<t:${Math.floor(activeSub.createdTimestamp / 1000)}:R>`, inline: true },
+                            { name: 'Ends/Renews', value: activeSub.endsTimestamp ? `<t:${Math.floor(activeSub.endsTimestamp / 1000)}:R>` : 'Never', inline: true },
+                            { name: 'Entitlement ID', value: `\`${activeSub.id}\``, inline: false }
+                        );
+                    } else { 
+                        embed.addFields({ name: 'Live API Status', value: '❌ No active subscription found for owner server.' }); 
+                    }
+                    
+                    if (dbSub) { 
+                        embed.addFields(
+                            { name: 'Database Cache Status', value: dbSub.is_active ? '✅ Active' : '❌ Inactive' }, 
+                            { name: 'Last Synced', value: `<t:${Math.floor(dbSub.updated_at / 1000)}:R>`, inline: true }
+                        ); 
+                    } else { 
+                        embed.addFields({ name: 'Database Cache Status', value: '🤔 No record found.' }); 
+                    }
+                    
                     await interaction.editReply({ embeds: [embed] });
+
                 } catch (error) {
                     console.error(`[SUB-CHECK] Failed to fetch entitlements for guild ${guild.id}:`, error);
                     await interaction.editReply({ content: `An error occurred while fetching entitlements for **${guild.name}**:\n\`\`\`${error.message}\`\`\`` });
                 }
 
-            // --- [NEW SUBCOMMAND] Owner Stats ---
             } else if (subcommand === 'stats') {
                 await interaction.deferReply({ ephemeral: true });
                 const paramGroupName = interaction.options.getString('group_name');
                 
-                // Lookup group by name
                 const group = db.prepare('SELECT group_id, group_name FROM relay_groups WHERE group_name = ?').get(paramGroupName);
                 if (!group) {
                     return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${paramGroupName}".` });
@@ -306,7 +354,6 @@ module.exports = {
                 const groupId = group.group_id;
                 const groupNameDisplay = group.group_name;
 
-                // --- Stats Calculation Logic (Same as public, but for specific group) ---
                 const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId).map(row => row.guild_id);
                 let totalMembers = 0;
                 let accessibleServerCount = 0;
@@ -389,8 +436,9 @@ module.exports = {
 
         if ((subcommand === 'delete_group' && focusedOption.name === 'name') ||
             (subcommand === 'rename_group' && focusedOption.name === 'current_name') ||
-            // [THE FIX] Added stats to autocomplete
-            (subcommand === 'stats' && focusedOption.name === 'group_name')) {
+            (subcommand === 'stats' && focusedOption.name === 'group_name') ||
+            // [THE FIX] Added check_subscription to autocomplete handler
+            (subcommand === 'check_subscription' && focusedOption.name === 'group_name')) {
             
             const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
             const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25').all(searchTerm);
