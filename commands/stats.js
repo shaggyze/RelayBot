@@ -7,7 +7,8 @@ const { getSupporterSet } = require('../utils/supporterManager.js');
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('stats')
-        .setDescription('Shows activity statistics for the relay group linked to this channel.')
+        .setDescription('Shows activity statistics for the relay group linked to this channel.'),
+
 
     async execute(interaction) {
         if (!interaction.inGuild()) {

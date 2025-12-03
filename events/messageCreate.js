@@ -4,7 +4,7 @@ const db = require('../db/database.js');
 const crypto = require('crypto');
 const relayQueue = require('../utils/relayQueue.js'); // [REQUIRED] The new queue system
 
-const MAX_PAYLOAD_SIZE = 7.0 * 1024 * 1024;
+const MAX_PAYLOAD_SIZE = 6.0 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
 const RATE_LIMIT_CHARS = 100000;
 const DISCORD_MESSAGE_LIMIT = 2000;
