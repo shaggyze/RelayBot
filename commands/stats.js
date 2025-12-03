@@ -1,24 +1,13 @@
 // commands/stats.js
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const db = require('../db/database.js');
-const { isSupporter, getSupporterSet } = require('../utils/supporterManager.js'); 
 const { getRateLimitDayString } = require('../utils/time.js');
-
-const BOT_OWNER_ID = '182938628643749888'; // Make sure this is correctly set
+const { getSupporterSet } = require('../utils/supporterManager.js'); 
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('stats')
         .setDescription('Shows activity statistics for the relay group linked to this channel.')
-        // [THE FIX] Add group_name parameter, but restrict its visibility/usage
-        .addStringOption(option => 
-            option.setName('group_name')
-                .setDescription('(Bot Owner Only) Name of the group to check stats for.')
-                .setRequired(false)
-                // This parameter will only be shown to specific users based on client-side Discord logic
-                // and we will enforce the server-side check below.
-                .setAutocomplete(true) 
-        ),
 
     async execute(interaction) {
         if (!interaction.inGuild()) {
@@ -28,39 +17,20 @@ module.exports = {
         await interaction.deferReply({ ephemeral: true });
         const channelId = interaction.channel.id;
         
-        const isBotOwner = interaction.user.id === BOT_OWNER_ID;
-        const paramGroupName = interaction.options.getString('group_name');
-
-        let groupIdToLookup = null;
-        let embedTitle = `📊 Relay Group Statistics`; // Default generic title for public users
-
         try {
-            if (paramGroupName) { // If paramGroupName IS provided (should only happen for bot owner due to UI)
-                if (!isBotOwner) {
-                    // [SECURITY FIX] Critical: Non-owner provided paramGroupName, deny explicitly.
-                    return interaction.editReply({ content: `❌ **Permission Denied:** Only the bot owner can use the \`group_name\` parameter.`, ephemeral: true });
-                }
-                // Bot owner provided a group name, use it for lookup and title
-                const groupFromParam = db.prepare('SELECT group_id, group_name FROM relay_groups WHERE group_name = ?').get(paramGroupName);
-                if (!groupFromParam) {
-                    return interaction.editReply({ content: `❌ **Error:** No relay group found with the name "${paramGroupName}".` });
-                }
-                groupIdToLookup = groupFromParam.group_id;
-                embedTitle = `📊 Relay Group Statistics for "${groupFromParam.group_name}"`; // Show specific name for owner
-            } else {
-                // Default: Use the group linked to the current channel for all users
-                const linkInfo = db.prepare('SELECT group_id FROM linked_channels WHERE channel_id = ?').get(channelId);
+            // 1. Find the group linked to the current channel
+            const linkInfo = db.prepare('SELECT group_id FROM linked_channels WHERE channel_id = ?').get(channelId);
 
-                if (!linkInfo) {
-                    return interaction.editReply({ content: '❌ **Error:** This channel is not linked to any relay group. You must run `/relay link_channel` first.' });
-                }
-                groupIdToLookup = linkInfo.group_id;
-                // For non-owners, embedTitle remains generic. For owners, it might become specific if they used paramGroupName.
-                // If owner didn't use paramGroupName, they also get generic title here.
+            if (!linkInfo) {
+                return interaction.editReply({ content: '❌ **Error:** This channel is not linked to any relay group. You must run `/relay link_channel` first.' });
             }
+            
+            const groupId = linkInfo.group_id;
+            const group = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(groupId);
+            const groupNameDisplay = group ? group.group_name : 'Unknown Group';
 
-            // --- From here, use groupIdToLookup for all queries ---
-            const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupIdToLookup).map(row => row.guild_id);
+            // 2. Calculate Stats
+            const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId).map(row => row.guild_id);
 
             let totalMembers = 0;
             let accessibleServerCount = 0;
@@ -81,32 +51,20 @@ module.exports = {
                             }
                         });
                     } catch (fetchError) {
-                        console.warn(`[STATS] Failed to fetch members for guild ${guild.name} (${guild.id}). Supporter count will be inaccurate for this guild. Error: ${fetchError.message}`);
                         totalMembers += guild.memberCount; 
                         accessibleServerCount++;
-                        guild.members.cache.forEach(member => {
-                            if (supporterSet.has(member.user.id)) {
-                                uniqueSupporterIds.add(member.user.id);
-                            }
-                        });
                     }
                 }
             }
             
             const totalSupporters = uniqueSupporterIds.size;
-
             const serverCount = uniqueGuildIds.length;
-            const channelCount = db.prepare('SELECT COUNT(channel_id) as count FROM linked_channels WHERE group_id = ?').get(groupIdToLookup).count;
+            const channelCount = db.prepare('SELECT COUNT(channel_id) as count FROM linked_channels WHERE group_id = ?').get(groupId).count;
             
             const groupStatsSummary = db.prepare(`
-                SELECT 
-                    SUM(character_count) as total_chars, 
-                    COUNT(DISTINCT day) as active_days,
-                    MIN(day) as first_active_day,
-                    MAX(day) as last_active_day
-                FROM group_stats
-                WHERE group_id = ?
-            `).get(groupIdToLookup);
+                SELECT SUM(character_count) as total_chars, COUNT(DISTINCT day) as active_days, MIN(day) as first_active_day, MAX(day) as last_active_day
+                FROM group_stats WHERE group_id = ?
+            `).get(groupId);
 
             const totalChars = groupStatsSummary?.total_chars || 0;
             const activeDays = groupStatsSummary?.active_days || 0;
@@ -115,7 +73,7 @@ module.exports = {
             const dailyAvg = (activeDays > 0) ? Math.round(totalChars / activeDays) : 0;
 
             const todayString = getRateLimitDayString();
-            const todaysGroupStats = db.prepare('SELECT warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(groupIdToLookup, todayString);
+            const todaysGroupStats = db.prepare('SELECT warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(groupId, todayString);
             
             let statusValue = '';
             if (totalSupporters > 0) {
@@ -127,7 +85,7 @@ module.exports = {
             }
             
             const statsEmbed = new EmbedBuilder()
-                .setTitle(embedTitle) // Use the determined title
+                .setTitle(`📊 Relay Group Statistics`) // Generic Title for Public
                 .setColor('#5865F2')
                 .addFields(
                     { name: 'Status', value: statusValue, inline: true }, 
@@ -148,30 +106,8 @@ module.exports = {
 
         } catch (error) {
             console.error('Error in /stats command:', error);
-            await interaction.editReply({ content: 'An unexpected error occurred while fetching statistics. Please check the logs.' });
+            await interaction.editReply({ content: 'An unexpected error occurred while fetching statistics.' });
         }
     },
-
-    // [THE FIX] Autocomplete for group_name - restricted to bot owner
-    async autocomplete(interaction) {
-        const focusedOption = interaction.options.getFocused(true);
-        const isBotOwner = interaction.user.id === BOT_OWNER_ID; 
-        const choices = [];
-
-        // Autocomplete for /stats group_name - restricted to bot owner
-        if (interaction.commandName === 'stats' && focusedOption.name === 'group_name' && isBotOwner) {
-            // [THE FIX] Modify the query to handle empty focusedOption.value
-            const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
-            const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25')
-                .all(searchTerm);
-            
-            groups.forEach(group => {
-                choices.push({
-                    name: group.group_name,
-                    value: group.group_name,
-                });
-            });
-        }
-        await interaction.respond(choices);
-    },
+    // Autocomplete removed as it is no longer needed here
 };
