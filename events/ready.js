@@ -31,7 +31,6 @@ async function primeMemberCache(client) {
     console.log('[Cache] Background member cache priming complete.');
 }
 
-// --- [NEW] Dev Server Role Manager ---
 async function manageDevServerRole(client) {
     const devGuildId = process.env.DEV_GUILD_ID; 
     if (!devGuildId) return;
@@ -40,6 +39,7 @@ async function manageDevServerRole(client) {
         const guild = await client.guilds.fetch(devGuildId).catch(() => null);
         if (!guild) return;
 
+        // 1. Setup the Role
         let role = guild.roles.cache.find(r => r.name === 'Supporter');
         if (!role) {
             console.log('[Role-Sync] "Supporter" role not found in Dev server. Creating it...');
@@ -58,7 +58,27 @@ async function manageDevServerRole(client) {
         }
 
         const allSupporters = getSupporterSet();
-        const members = await guild.members.fetch({ time: 10000 });
+        
+        // 2. [THE FIX] Smart Fetching
+        // Check if we already have all members cached (from primeMemberCache).
+        if (guild.memberCount !== guild.members.cache.size) {
+            try {
+                // Try to fetch.
+                await guild.members.fetch({ time: 10000 });
+            } catch (err) {
+                // If it fails (packet drop), try ONE more time with a longer timeout.
+                console.warn(`[Role-Sync] Initial fetch dropped for Dev Guild. Retrying...`);
+                try {
+                    await guild.members.fetch({ time: 30000 });
+                } catch (retryErr) {
+                    console.error(`[Role-Sync] Failed to fetch members after retry: ${retryErr.message}`);
+                    // Don't return; try to work with whatever cache we have.
+                }
+            }
+        }
+
+        // Use the cache (which is now populated)
+        const members = guild.members.cache;
 
         for (const [memberId, member] of members) {
             if (member.user.bot) continue;
