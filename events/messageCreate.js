@@ -2,130 +2,119 @@
 const { Events, WebhookClient, Collection, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
 const crypto = require('crypto');
+const relayQueue = require('../utils/relayQueue.js'); // [REQUIRED] The new queue system
 
-const webhookCache = new Collection();
 const MAX_PAYLOAD_SIZE = 7.0 * 1024 * 1024;
 const MAX_USERNAME_LENGTH = 80;
 const RATE_LIMIT_CHARS = 100000;
 const DISCORD_MESSAGE_LIMIT = 2000;
 
+// State Variables
 const groupsBeingWarned = new Set();
+const dailySupporterCache = new Map(); // Caches supporter status for 24h to reduce DB/API hits
 
-// [THE FIX] In-memory cache to store groups confirmed as supporters for the day
-// Key: groupId (Integer), Value: Date String "YYYY-MM-DD"
-const dailySupporterCache = new Map();
-
-// Re-using simplified placeholder stubs for external functions
-const createVoteMessage = () => ({}); 
-const isSupporter = (id) => false;
-const getSupporterSet = () => new Set();
+// Helper stubs (Assuming these are defined in your project structure)
+const createVoteMessage = () => ({ content: "Please vote/subscribe to increase limits!", embeds: [] }); 
+const isSupporter = (id) => false; // Your supporterManager handles this
+const getSupporterSet = () => new Set(); // Your supporterManager handles this
 const getRateLimitDayString = () => new Date().toISOString().slice(0, 10);
 const RESET_HOUR_UTC = 19;
 
-// [THE FIX] Updated function with caching logic
+// [OPTIMIZED] Supporter Check: Database -> Memory Cache -> API Batch
 async function checkGroupForSupporters(client, groupId) {
     const currentDay = getRateLimitDayString();
 
-    // 1. Fast Path: Check Cache
-    // If we already confirmed this group has a supporter TODAY, skip all other checks.
+    // 1. Memory Cache Check (Fastest)
     if (dailySupporterCache.get(groupId) === currentDay) {
         return true;
     }
 
     const supporterIdList = getSupporterSet();
     
-    // 2. Database Check: Guild Subscriptions
-    // We check if any guild in this group has an active subscription.
+    // 2. Database Check: Subscriptions (Fast)
     const guildsInGroup = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId);
     
     for (const row of guildsInGroup) {
         const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(row.guild_id);
         if (subscription) {
-            // Found a subscription! Cache it for today and return.
             dailySupporterCache.set(groupId, currentDay);
             return true; 
         }
     }
 
-    // 3. User Check: Patron List (Memory & Bulk Fetch)
+    // 3. User/Patron Check (Slower)
     if (supporterIdList.size > 0) {
         for (const row of guildsInGroup) {
             try {
                 const guild = client.guilds.cache.get(row.guild_id);
                 if (!guild) continue;
 
-                // A. Check Cache (Instant)
+                // A. Check Guild Cache
                 const hasSupporterInCache = guild.members.cache.some(member => supporterIdList.has(member.id));
                 if (hasSupporterInCache) {
-                    // Found a patron in cache! Cache group status and return.
                     dailySupporterCache.set(groupId, currentDay);
                     return true;
                 }
 
-                // B. Bulk Fetch (Only if needed)
+                // B. Bulk Fetch (Only if list is small enough to avoid rate limits)
                 const supporterArray = Array.from(supporterIdList);
-                if (supporterArray.length <= 100) {
+                if (supporterArray.length <= 50) { // Strict limit to prevent API spam
                     try {
                         const fetchedMembers = await guild.members.fetch({ user: supporterArray });
                         if (fetchedMembers.size > 0) {
-                            // Found a patron via fetch! Cache group status and return.
                             dailySupporterCache.set(groupId, currentDay);
                             return true;
                         }
-                    } catch (e) {
-                        // Ignore specific fetch errors
-                    }
+                    } catch (e) { /* Ignore fetch errors */ }
                 }
             } catch (error) {
-                console.warn(`[SupporterCheck] Error checking guild ${row.guild_id}. Defaulting to true.`);
-                // If we default to true due to error, we DO NOT cache it, 
-                // so we retry properly next time.
+                // On error, default to true to avoid punishing users during API outages
                 return true;
             }
         }
     }
 
-    // If we get here, no supporter was found.
     return false;
 }
 
 module.exports = {
     name: Events.MessageCreate,
     async execute(message) {
-        let shouldLogVerbose = false;
         const executionId = crypto.randomBytes(4).toString('hex');
 
         try {
-            // --- CRITICAL GUARD CLAUSES ---
+            // --- 1. MASTER GUARD: Ignore DMs ---
             if (!message.guild) return;
 
-            // 1. ALWAYS ignore messages sent by THIS bot's user account.
+            // --- 2. MASTER GUARD: Self-Ignore ---
+            // Prevents loops. Must be the very first logic check.
             if (message.author.id === message.client.user.id) return;
-            
+
+            // --- 3. Database Context ---
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
             if (!sourceChannelInfo) return;
 
-            // --- 2. CONDITIONAL IGNORE for ALL OTHER bots/webhooks ---
+            // --- 4. Conditional Bot/Webhook Logic ---
             const processBots = sourceChannelInfo.process_bot_messages; 
-
+            // If setting is OFF (or null), ignore other bots/webhooks
             if (!processBots && (message.author.bot || message.webhookId)) {
                 return; 
             }
-            
-            // --- Blacklist Check ---
+
+            // --- 5. Blacklist Check ---
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
-				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
+				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} for group ${sourceChannelInfo.group_id}.`);
 				return; 
 			}
 
             const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
             if (!groupInfo) {
-                console.error(`[ERROR] A linked channel (${message.channel.id}) exists for a deleted group_id (${sourceChannelInfo.group_id}). Cleaning up...`);
-                db.prepare('DELETE FROM linked_channels WHERE group_id = ?').run(sourceChannelInfo.group_id);
+                console.error(`[ERROR] Linked channel exists for deleted group ${sourceChannelInfo.group_id}. Cleanup required.`);
                 return;
             }
             
+            // --- 6. Rate Limit Logic ---
             const rateLimitDayString = getRateLimitDayString();
             const messageLength = (message.content || '').length;
             
@@ -136,85 +125,70 @@ module.exports = {
                 `).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
             }
 
-            // --- Rate Limit Logic ---
             const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
             
             if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
-                if (groupsBeingWarned.has(sourceChannelInfo.group_id)) return;
+                // Check specific guild subscription just in case
+                const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(message.guild.id);
+                
+                if (!subscription) {
+                    if (groupsBeingWarned.has(sourceChannelInfo.group_id)) return; // Race condition lock
 
-                if (!stats.warning_sent_at) {
-                    try {
-                        groupsBeingWarned.add(sourceChannelInfo.group_id);
-                        console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" has exceeded the daily limit. Sending warning.`);
-                        
-                        const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
-                        const now = new Date();
-                        const nextResetTime = new Date();
-                        nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
-                        if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
-                        const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
-                        const warningPayload = createVoteMessage(); 
-                        warningPayload.username = 'RelayBot';
-                        warningPayload.avatarURL = message.client.user.displayAvatarURL();
-                        warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume ${timerString} or when a supporter joins.`;
-                        
-                        for (const target of allTargetChannels) {
-                            try {
-                                const webhookClient = new WebhookClient({ url: target.webhook_url });
-                                await webhookClient.send(warningPayload);
-                            } catch {}
+                    if (!stats.warning_sent_at) {
+                        try {
+                            groupsBeingWarned.add(sourceChannelInfo.group_id);
+                            console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" exceeded limit. Sending warning.`);
+                            
+                            const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                            const warningPayload = createVoteMessage();
+                            
+                            // Use the Queue to send warnings too, to respect rate limits
+                            for (const target of allTargetChannels) {
+                                relayQueue.add(target.webhook_url, warningPayload, db, {
+                                    targetChannelId: 'WARNING_SYSTEM' // Dummy ID for logs
+                                });
+                            }
+                            db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
+                        } finally {
+                            groupsBeingWarned.delete(sourceChannelInfo.group_id);
                         }
-                        db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
-                    } finally {
-                        groupsBeingWarned.delete(sourceChannelInfo.group_id);
                     }
+                    return; // Stop relaying
                 }
-                return; 
             }
 
-            // --- Branding Logic ---
-			const senderName = message.member?.displayName ?? message.author.username;
+            // --- 7. Prepare Targets ---
+            const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
+            if (targetChannels.length === 0) return;
+
+
+            // --- 8. Construct Payload Data ---
+            const senderName = message.member?.displayName ?? message.author.username;
 			const serverBrand = sourceChannelInfo.brand_name || message.guild.name;
 			let username = `${senderName} (${serverBrand})`;
-
 			if (username.length > MAX_USERNAME_LENGTH) {
 				username = username.substring(0, MAX_USERNAME_LENGTH - 3) + '...';
 			}
             const avatarURL = message.author.displayAvatarURL();
-            
-            const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
-            if (targetChannels.length === 0) {
-                console.log(`[DEBUG][${executionId}] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
-                return;
-            }
 
-            console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
-        
-            // Flag to ensure full reply embed only appears once
+            // Prepare variables for the loop
             let isFirstTarget = true; 
-
+            
+            // --- 9. Main Relay Loop ---
             for (const target of targetChannels) {
-                shouldLogVerbose = false; 
                 
-                let initialMessageContent = message.content;
                 let replyEmbed = null;
-                let stickerId = null;
-                let finalContent = null;
+                let replyLinkText = '';
+                let finalContent = message.content;
                 let hasUnmappedRoles = false;
                 let safeFiles = [];
                 let largeFiles = [];
                 let currentFileSize = 0;
                 let initialJsonSize = 0;
-                let basePayloadForSizeCalc = {};
-                let finalPayloadForSend = {};
-                let payloadEmbeds = [];
-                let finalPayloadContent = null;
                 
                 try {
-                    const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
-                    
-                    // --- Reply Embed Logic ---
+                    // A. Reply Logic
                     if (message.reference && message.reference.messageId) {
                         let repliedMessage;
                         try {
@@ -231,6 +205,7 @@ module.exports = {
                             let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
                             if (repliedMessage.editedTimestamp) repliedContent += ' *(edited)*';
 
+                            // Database lookup for cross-server link
                             const repliedToId = repliedMessage.id;
                             const parentInfo = db.prepare('SELECT original_message_id FROM relayed_messages WHERE relayed_message_id = ?').get(repliedToId);
                             const rootOriginalId = parentInfo ? parentInfo.original_message_id : repliedToId;
@@ -241,6 +216,7 @@ module.exports = {
                             if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
                                 messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                             } else {
+                                // Fallback link to source
                                 const originalMessageInfo = db.prepare('SELECT original_channel_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(rootOriginalId);
                                 if(originalMessageInfo) {
                                     const originalGuildId = message.client.channels.cache.get(originalMessageInfo.original_channel_id)?.guild.id;
@@ -255,14 +231,14 @@ module.exports = {
                                     .setColor('#B0B8C6')
                                     .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                     .setDescription(repliedContent);
+                            } else if (messageLink) {
+                                replyLinkText = `[ Replying to ${repliedAuthorName} ](${messageLink}) `;
                             }
                         }
                     }
 
-                    // --- Role Logic ---
-                    let targetContent = message.content;
-                    const roleMentions = targetContent.match(/<@&(\d+)>/g);
-
+                    // B. Role Logic
+                    const roleMentions = finalContent.match(/<@&(\d+)>/g);
                     if (roleMentions) {
                         const targetGuild = await message.client.guilds.fetch(target.guild_id).catch(() => null);
                         const canManageRoles = targetGuild && targetGuild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles);
@@ -281,21 +257,18 @@ module.exports = {
                             let targetRole = db.prepare(`SELECT role_id FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?`).get(target.group_id, target.guild_id, roleMap.role_name);
                             
                             if (targetRole) {
-                                targetContent = targetContent.replace(mention, `<@&${targetRole.role_id}>`);
+                                finalContent = finalContent.replace(mention, `<@&${targetRole.role_id}>`);
                             } 
                             else if (allowAutoRole) {
                                 try {
                                     const newRole = await targetGuild.roles.create({
                                         name: roleMap.role_name,
                                         mentionable: false, 
-                                        reason: `Auto-creating role for RelayBot mapping: ${roleMap.role_name}`
+                                        reason: `Auto-creating for RelayBot: ${roleMap.role_name}`
                                     });
                                     db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(target.group_id, target.guild_id, roleMap.role_name, newRole.id);
-                                    targetContent = targetContent.replace(mention, `<@&${newRole.id}>`);
-                                } catch (roleError) {
-                                    console.error(`[AUTO-ROLE-FAIL] FAILED to create role "${roleMap.role_name}":`, roleError);
-                                    hasUnmappedRoles = true; 
-                                }
+                                    finalContent = finalContent.replace(mention, `<@&${newRole.id}>`);
+                                } catch (e) { hasUnmappedRoles = true; }
                             } 
                             else {
                                 hasUnmappedRoles = true;
@@ -303,48 +276,17 @@ module.exports = {
                         }
                     }
                 
-                    finalContent = targetContent;
                     const contentWithoutMentions = finalContent.replace(/<@!?&?#?(\d+)>/g, '').trim();
-                    
                     if (contentWithoutMentions.length === 0 && hasUnmappedRoles) {
-                        finalContent = `*(A role in the original message was not relayed because it has not been mapped in this server. An admin needs to manually map a role or enable and run the auto-sync feature.)*`;
+                        finalContent = `*(Unmapped role in original message. Admin can map it or enable auto-sync.)*`;
                     }
 
-                    let fileNoticeString = "";
-                    if (largeFiles.length > 0) {
-                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})*`;
-                    }
-                    let finalPayloadContent = finalContent + fileNoticeString;
-
-                    // [THE FIX] Handle Forwarded Messages (Snapshots)
-                    if (message.messageSnapshots && message.messageSnapshots.size > 0) {
-                        const snapshot = message.messageSnapshots.first();
-                        if (snapshot) {
-                            if (snapshot.content) {
-                                finalPayloadContent += `\n> *Forwarded Message:*\n${snapshot.content}`;
-                            }
-                            if (snapshot.embeds && snapshot.embeds.length > 0) {
-                                payloadEmbeds.push(...snapshot.embeds);
-                            }
-                            if (snapshot.attachments && snapshot.attachments.size > 0) {
-                                // We process snapshot attachments using the same logic as normal attachments
-                                // but we can't retroactively add them to 'safeFiles' easily here without re-running size checks.
-                                // For simplicity, we just add their URLs if we assume they fit, or better:
-                                // We should ideally loop them into the attachment processor.
-                                // Given complexity, just appending URLs to content is safest for forwarded images:
-                                const snapshotFileLinks = snapshot.attachments.map(a => a.url).join('\n');
-                                finalPayloadContent += `\n${snapshotFileLinks}`;
-                            }
-                        }
-                    }
+                    // C. Content Prep & Truncation
+                    let finalPayloadContent = replyLinkText + finalContent;
                     
-                    if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
-                        const truncationNotice = `\n*(Message was truncated...)*`;
-                        finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
-                    }
-
-                    basePayloadForSizeCalc = {
-                        content: finalContent,
+                    // D. Payload Construction (For Size Check)
+                    const basePayloadForSizeCalc = {
+                        content: finalPayloadContent,
                         username: username,
                         avatarURL: avatarURL,
                         embeds: [],
@@ -353,18 +295,12 @@ module.exports = {
                     if (replyEmbed) basePayloadForSizeCalc.embeds.push(replyEmbed);
                     basePayloadForSizeCalc.embeds.push(...message.embeds);
                     
-                    if (message.stickers.size > 0) {
-                        const sticker = message.stickers.first();
-                        if (sticker && sticker.id) {
-                            stickerId = sticker.id;
-                        }
-                    }
-                    if (stickerId) {
-                         basePayloadForSizeCalc.sticker_ids = [stickerId];
-                    }
+                    const stickerId = message.stickers.size > 0 ? message.stickers.first()?.id : undefined;
+                    if (stickerId) basePayloadForSizeCalc.sticker_ids = [stickerId];
 
                     initialJsonSize = Buffer.byteLength(JSON.stringify(basePayloadForSizeCalc));
                     
+                    // E. Attachment Selection
                     const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
                     
                     for (const att of sortedAttachments) {
@@ -375,105 +311,66 @@ module.exports = {
                             largeFiles.push({ name: att.name, size: att.size });
                         }
                     }
-
-                    // Re-calculate final content with large files notice if needed (logic moved above but needs to be consistent)
-                    // We did it above, but safeFiles/largeFiles wasn't populated yet. 
-                    // [CORRECTION]: We need to construct finalPayloadContent AFTER file processing.
-                    
-                    fileNoticeString = ""; // Reset and rebuild
-                    if (largeFiles.length > 0) {
-                        fileNoticeString = `\n*(Note: ${largeFiles.length} file(s) were too large or exceeded the total upload limit and were not relayed: ${largeFiles.map(f => f.name).join(', ')})`;
-                    }
-                    finalPayloadContent = finalContent + fileNoticeString; // Re-add notice
-                    
-                    // Re-apply Forwarded Message Logic (needs to happen here to be part of content)
+                    // Handle Snapshot Attachments (Forwarded messages)
                     if (message.messageSnapshots && message.messageSnapshots.size > 0) {
-                         const snapshot = message.messageSnapshots.first();
-                         if (snapshot) {
-                            if (snapshot.content) finalPayloadContent += `\n> *Forwarded Message:*\n${snapshot.content}`;
-                            if (snapshot.embeds && snapshot.embeds.length > 0) payloadEmbeds.push(...snapshot.embeds);
-                            if (snapshot.attachments && snapshot.attachments.size > 0) finalPayloadContent += `\n${snapshot.attachments.map(a => a.url).join('\n')}`;
+                        const snapshot = message.messageSnapshots.first();
+                         if (snapshot && snapshot.attachments) {
+                            snapshot.attachments.forEach(att => {
+                                if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
+                                    safeFiles.push(att.url);
+                                    currentFileSize += att.size;
+                                }
+                            });
                          }
                     }
 
-                    if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
-                        const truncationNotice = `\n*(Message was truncated...)*`;
-                        finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
+                    if (largeFiles.length > 0) {
+                        finalPayloadContent += `\n*(Note: ${largeFiles.length} file(s) too large: ${largeFiles.map(f => f.name).join(', ')})*`;
                     }
 
-                    payloadEmbeds = [];
+                    // Forwarded Text Logic
+                    if (message.messageSnapshots && message.messageSnapshots.size > 0) {
+                        const snapshot = message.messageSnapshots.first();
+                        if (snapshot && snapshot.content) {
+                            finalPayloadContent += `\n> *Forwarded:*\n${snapshot.content}`;
+                        }
+                    }
+
+                    if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
+                        finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - 50) + "...(truncated)";
+                    }
+
+                    const payloadEmbeds = [];
                     if (replyEmbed) payloadEmbeds.push(replyEmbed);
                     payloadEmbeds.push(...message.embeds);
+                    // Forwarded Embeds
+                    if (message.messageSnapshots && message.messageSnapshots.size > 0) {
+                        const snapshot = message.messageSnapshots.first();
+                        if (snapshot && snapshot.embeds) payloadEmbeds.push(...snapshot.embeds);
+                    }
 
-                    finalPayloadForSend = {
+                    // F. Final Object Construction
+                    const finalPayloadForSend = {
                         content: finalPayloadContent,
                         files: safeFiles,
                         embeds: payloadEmbeds,
                         username: username,
                         avatarURL: avatarURL,
-                        allowedMentions: basePayloadForSizeCalc.allowedMentions,
+                        allowedMentions: { parse: ['roles'], repliedUser: false },
                         sticker_ids: stickerId ? [stickerId] : undefined,
                     };
-                    
-                    // Check for empty payload
-                    const logFinalContentTrimmed = finalPayloadContent?.trim() || "";
-                    const isContentEmpty = !logFinalContentTrimmed;
-                    const areFilesEmpty = !finalPayloadForSend.files || finalPayloadForSend.files.length === 0;
-                    const areEmbedsEmpty = !finalPayloadForSend.embeds || finalPayloadForSend.embeds.length === 0;
-                    const haveStickerIds = finalPayloadForSend.sticker_ids && finalPayloadForSend.sticker_ids.length > 0;
 
-                    if (isContentEmpty && areFilesEmpty && areEmbedsEmpty && !haveStickerIds) {
-                         shouldLogVerbose = true; 
-                         console.log(`[DEBUG][${executionId}] Payload determined to be empty. Skipping send.`);
-                    }
-                    
-                    if (shouldLogVerbose) {
-                        console.error(`[FATAL-DEBUG][${executionId}] Verbose log triggered.`);
-                    }
+                    // --- G. SEND VIA QUEUE (The Fix) ---
+                    const meta = {
+                        originalMsgId: message.id,
+                        originalChannelId: message.channel.id,
+                        repliedToId: message.reference ? message.reference.messageId : null,
+                        targetChannelId: target.channel_id,
+                        executionId: executionId
+                    };
 
-                    let relayedMessage = null;
-                    const webhookClient = new WebhookClient({ url: target.webhook_url });
-                    
-                    try {
-                        relayedMessage = await webhookClient.send(finalPayloadForSend);
-                    } catch (sendError) {
-                        if (sendError.code === 40005) {
-                            shouldLogVerbose = true; 
-                            console.error(`[ERROR 40005] Caught Request entity too large for message ${message.id} to #${targetChannelName}.`);
-                            throw sendError;
-                        } else if (sendError.code === 50006 && finalPayloadForSend.sticker_ids) {
-                            try {
-                                const sticker = message.stickers.first(); 
-                                if (sticker && sticker.name) {
-                                    const fallbackPayload = { ...finalPayloadForSend };
-                                    delete fallbackPayload.sticker_ids; 
-                                    fallbackPayload.content += `\n*(sent sticker: ${sticker.name})*`;
-                                    if (fallbackPayload.content.length > DISCORD_MESSAGE_LIMIT) {
-                                        const truncationNotice = `\n*(Message was truncated...)*`;
-                                        fallbackPayload.content = fallbackPayload.content.substring(0, DISCORD_MESSAGE_LIMIT - truncationNotice.length) + truncationNotice;
-                                    }
-                                    relayedMessage = await webhookClient.send(fallbackPayload);
-                                }
-                            } catch (fallbackError) {
-                                if (fallbackError.code === 40005) shouldLogVerbose = true;
-                            }
-                        } else {
-                            throw sendError; 
-                        }
-                    }
-
-                    if (relayedMessage) {
-                        const repliedToOriginalId = message.reference ? message.reference.messageId : null;
-                        db.prepare(
-                            'INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, replied_to_id) VALUES (?, ?, ?, ?, ?)'
-                        ).run(
-                            message.id,
-                            message.channel.id,
-                            relayedMessage.id,
-                            relayedMessage.channel_id,
-                            repliedToOriginalId
-                        );
-                    }
+                    // [CRITICAL] Do not await this. Push to queue and move on.
+                    relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta);
 
                     isFirstTarget = false;
 

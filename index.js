@@ -4,31 +4,6 @@ const path = require('path');
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 require('dotenv').config();
 
-// [DIAGNOSTIC] Add global error handlers to catch anything that slips through.
-process.on('uncaughtException', (err, origin) => {
-    console.error('!!!!!!!!!! UNCAUGHT EXCEPTION !!!!!!!!!');
-    console.error(`Caught exception: ${err}\n` + `Exception origin: ${origin}`);
-    console.error(err.stack);
-});
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('!!!!!!!!!! UNHANDLED REJECTION !!!!!!!!!');
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-console.log('[DEBUG] index.js starting...');
-
-console.log('[DEBUG] Requiring database...');
-require('./db/database.js'); 
-console.log('[DEBUG] Database require() successful.');
-try {
-    console.log('[DEBUG] Requiring database...');
-    require('./db/database.js');
-    console.log('[DEBUG] Database require() successful.');
-} catch (error) {
-    console.error('[FATAL-CRASH] The application crashed while loading the database file.', error);
-    process.exit(1); // Exit immediately if the DB fails
-}
-
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -37,9 +12,35 @@ const client = new Client({
         GatewayIntentBits.GuildWebhooks,
         GatewayIntentBits.GuildMembers
     ],
-    rest: {
-        retries: 3,
-    },
+    // [PRO FEATURE] Increase internal cache limits to reduce API fetching
+    makeCache: Options.cacheWithLimits({
+        MessageManager: 50, // Keep message cache low to save RAM
+        GuildMemberManager: {
+            maxSize: 200,
+            keepOverLimit: member => member.id === client.user.id,
+        },
+    }),
+});
+
+// --- [NEW] Rate Limit Monitoring ---
+client.rest.on('rateLimited', (info) => {
+    console.warn(`[RATE-LIMIT] Hit a rate limit! 
+    Global: ${info.global} 
+    Method: ${info.method} 
+    Path: ${info.route} 
+    Timeout: ${info.timeToReset}ms 
+    Limit: ${info.limit}`);
+});
+
+// --- [NEW] Anti-Crash (Prevents Login Loops) ---
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[ANTI-CRASH] Unhandled Rejection:', reason);
+    // Do NOT exit the process. Keeping it alive prevents login-loop bans.
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[ANTI-CRASH] Uncaught Exception:', error);
+    // Do NOT exit the process.
 });
 
 // Log every debug message from discord.js
