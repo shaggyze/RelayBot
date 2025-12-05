@@ -1,7 +1,7 @@
 // utils/supporterManager.js
 const https = require('https');
 const db = require('../db/database.js');
-
+const { version } = require('../package.json');
 const WEBHOOK_URL = 'https://shaggyze.website/RelayBot/webhook.php';
 const PATRON_LIST_URL = 'https://shaggyze.website/RelayBot/patrons.txt';
 const VOTER_LIST_URL = 'https://shaggyze.website/RelayBot/voters.txt';
