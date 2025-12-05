@@ -71,14 +71,18 @@ module.exports = {
         try {
             if (!message.guild) return;
 
-            // --- SELF-IGNORE GUARD ---
-            if (message.author.id === message.client.user.id) return;
+            // --- MASTER SELF-IGNORE (THE FIX) ---
+            
+            // Check 1: Is the message tagged with our Application ID? 
+            // (This catches ALL webhooks created by this bot).
+            if (message.applicationId === message.client.user.id) return;
 
+            // Check 2: Is the author the bot user itself?
+            // (This catches standard messages sent by the bot user).
+            if (message.author.id === message.client.user.id) return;
+            
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
             if (!sourceChannelInfo) return;
-
-            const processBots = sourceChannelInfo.process_bot_messages; 
-            if (!processBots && (message.author.bot || message.webhookId)) return;
 
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
