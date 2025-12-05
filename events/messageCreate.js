@@ -160,8 +160,10 @@ module.exports = {
 
             // --- 7. Prepare Targets ---
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
+            console.log(`[DEBUG][${executionId}] No valid receiving channels found in group "${groupInfo.group_name}". Nothing to relay.`);
             if (targetChannels.length === 0) return;
 
+            console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
 
             // --- 8. Construct Payload Data ---
             const senderName = message.member?.displayName ?? message.author.username;
@@ -232,7 +234,7 @@ module.exports = {
                                     .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                     .setDescription(repliedContent);
                             } else if (messageLink) {
-                                replyLinkText = `[ Replying to ${repliedAuthorName} ](${messageLink}) `;
+                                replyLinkText = `<@${repliedMessage.author.id}> [ Replying to ${repliedAuthorName} ](${messageLink}) `;
                             }
                         }
                     }
@@ -295,7 +297,10 @@ module.exports = {
                     if (replyEmbed) basePayloadForSizeCalc.embeds.push(replyEmbed);
                     basePayloadForSizeCalc.embeds.push(...message.embeds);
                     
-                    const stickerId = message.stickers.size > 0 ? message.stickers.first()?.id : undefined;
+                    const sticker = message.stickers.first();
+                    const stickerId = sticker?.id;
+                    // We store name and URL to pass to the queue for fallbacks
+                    const stickerData = sticker ? { name: sticker.name, url: sticker.url } : null;
                     if (stickerId) basePayloadForSizeCalc.sticker_ids = [stickerId];
 
                     initialJsonSize = Buffer.byteLength(JSON.stringify(basePayloadForSizeCalc));
@@ -305,7 +310,15 @@ module.exports = {
                     
                     for (const att of sortedAttachments) {
                         if (initialJsonSize + currentFileSize + att.size <= MAX_PAYLOAD_SIZE) {
-                            safeFiles.push(att.url);
+                            let attachmentName = att.name;
+                            if (att.spoiler && !attachmentName.startsWith('SPOILER_')) {
+                                attachmentName = `SPOILER_${att.name}`;
+                            }
+
+                            safeFiles.push({
+                                attachment: att.url,
+                                name: attachmentName
+                            });
                             currentFileSize += att.size;
                         } else {
                             largeFiles.push({ name: att.name, size: att.size });
@@ -336,6 +349,27 @@ module.exports = {
                         }
                     }
 
+                    if (message.poll) {
+                        const pollEmbed = new EmbedBuilder()
+                            .setColor('#5865F2')
+                            .setAuthor({ name: '📊 Poll', iconURL: 'https://cdn.discordapp.com/emojis/123456789.png' }) // Optional icon
+                            .setTitle(message.poll.question.text.substring(0, 256));
+                        
+                        let description = '';
+                        message.poll.answers.forEach((answer, index) => {
+                            // Get emoji if it exists, otherwise use number
+                            const prefix = answer.emoji ? (answer.emoji.id ? `<:${answer.emoji.name}:${answer.emoji.id}>` : answer.emoji.name) : `${index + 1}.`;
+                            description += `${prefix} **${answer.text}**\n`;
+                        });
+                        
+                        pollEmbed.setDescription(description.substring(0, 4096));
+                        payloadEmbeds.push(pollEmbed);
+                    }
+
+                    if (message.flags.has(MessageFlags.IsVoiceMessage)) {
+                        finalPayloadContent += `\n🎤 **[Voice Message]**\n`
+                    }
+
                     if (finalPayloadContent.length > DISCORD_MESSAGE_LIMIT) {
                         finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - 50) + "...(truncated)";
                     }
@@ -356,8 +390,10 @@ module.exports = {
                         embeds: payloadEmbeds,
                         username: username,
                         avatarURL: avatarURL,
-                        allowedMentions: { parse: ['roles'], repliedUser: false },
+                         allowedMentions: { parse: ['roles', 'users'], repliedUser: false },
                         sticker_ids: stickerId ? [stickerId] : undefined,
+                        tts: message.tts,
+                        flags: message.flags.bitfield & (4096 | 4)
                     };
 
                     // --- G. SEND VIA QUEUE (The Fix) ---
@@ -367,6 +403,7 @@ module.exports = {
                         repliedToId: message.reference ? message.reference.messageId : null,
                         targetChannelId: target.channel_id,
                         executionId: executionId
+                        stickerData: stickerData
                     };
 
                     // [CRITICAL] Do not await this. Push to queue and move on.
@@ -376,7 +413,7 @@ module.exports = {
 
                 } catch (error) {
                     if (error.code === 40005) shouldLogVerbose = true; 
-                    
+
                     const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
                     if (error.code === 10015) {
                         console.error(`[AUTO-CLEANUP][${executionId}] Webhook for channel #${targetChannelNameForError} is invalid. Removing from relay.`);
