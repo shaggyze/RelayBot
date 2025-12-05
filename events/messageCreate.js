@@ -84,6 +84,14 @@ module.exports = {
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
             if (!sourceChannelInfo) return;
 
+            // --- CONDITIONAL IGNORE for OTHER bots/webhooks ---
+            const processBots = sourceChannelInfo.process_bot_messages; 
+
+            // If setting is OFF (0/null), ignore other bots/webhooks.
+            if (!processBots && (message.author.bot || message.webhookId)) {
+                return; 
+            }
+
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
 				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
