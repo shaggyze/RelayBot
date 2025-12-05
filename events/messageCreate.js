@@ -170,12 +170,13 @@ module.exports = {
                 try {
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
                     
-                    // --- Reply Embed Logic ---
+                    // --- Reply Embed Logic B0B8C6 ---
                     if (message.reference && message.reference.messageId) {
                         let repliedMessage;
                         try {
                             repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                         } catch {
+                            // Fallback if original is deleted/inaccessible
                             replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
                         }
                         
@@ -185,23 +186,31 @@ module.exports = {
                             let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
                             if (repliedMessage.editedTimestamp) repliedContent += ' *(edited)*';
 
+                            // 1. Find the Root Original ID
+                            // Check if the message we replied to was itself a relayed message.
                             const repliedToId = repliedMessage.id;
                             const parentInfo = db.prepare('SELECT original_message_id FROM relayed_messages WHERE relayed_message_id = ?').get(repliedToId);
                             const rootOriginalId = parentInfo ? parentInfo.original_message_id : repliedToId;
 
+                            // 2. Try to find the sibling message in the CURRENT target channel
                             const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(rootOriginalId, target.channel_id);
 
                             let messageLink = null;
                             if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
+                                // Success: We found the copy in this specific target server. Link to it.
                                 messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                             } else {
+                                // Fallback: Link to the root original message (cross-server link)
+                                // We try to find the original channel ID from the DB or use the replied message's url
                                 const originalMessageInfo = db.prepare('SELECT original_channel_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(rootOriginalId);
-                                if(originalMessageInfo) {
+                                if (originalMessageInfo) {
                                     const originalGuildId = message.client.channels.cache.get(originalMessageInfo.original_channel_id)?.guild.id;
-                                    if(originalGuildId) {
+                                    if (originalGuildId) {
                                         messageLink = `https://discord.com/channels/${originalGuildId}/${originalMessageInfo.original_channel_id}/${rootOriginalId}`;
                                     }
                                 }
+                                // If DB lookup failed (e.g. pruned), use the direct link to the message we replied to
+                                if (!messageLink) messageLink = repliedMessage.url;
                             }
                             
                             replyEmbed = new EmbedBuilder()
@@ -209,7 +218,7 @@ module.exports = {
                                 .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                 .setDescription(repliedContent);
                             
-                            // [Ping]
+                            // Create the ping string for the content
                             replyPing = `<@${repliedMessage.author.id}> `;
                         }
                     }
