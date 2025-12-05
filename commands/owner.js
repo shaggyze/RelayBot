@@ -357,7 +357,10 @@ module.exports = {
                 const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId).map(row => row.guild_id);
                 let totalMembers = 0;
                 let accessibleServerCount = 0;
+                // Sets to store unique data
                 const uniqueSupporterIds = new Set();
+                const uniqueSupporterTags = new Set(); // Store usernames
+
                 const supporterSet = getSupporterSet();
 
                 for (const guildId of uniqueGuildIds) {
@@ -367,13 +370,23 @@ module.exports = {
                             const members = await guild.members.fetch();
                             totalMembers += guild.memberCount;
                             accessibleServerCount++;
+                            
                             members.forEach(member => {
-                                if (supporterSet.has(member.user.id)) uniqueSupporterIds.add(member.user.id);
+                                if (supporterSet.has(member.user.id)) {
+                                    uniqueSupporterIds.add(member.user.id);
+                                    uniqueSupporterTags.add(member.user.tag); // Capture username/tag
+                                }
                             });
                         } catch (fetchError) {
+                            // Fallback if fetch fails (use cache)
                             totalMembers += guild.memberCount; 
                             accessibleServerCount++;
-                            guild.members.cache.forEach(member => { if (supporterSet.has(member.user.id)) uniqueSupporterIds.add(member.user.id); });
+                            guild.members.cache.forEach(member => { 
+                                if (supporterSet.has(member.user.id)) {
+                                    uniqueSupporterIds.add(member.user.id);
+                                    uniqueSupporterTags.add(member.user.tag);
+                                }
+                            });
                         }
                     }
                 }
