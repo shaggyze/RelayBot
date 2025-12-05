@@ -1,35 +1,12 @@
 // events/ready.js
-const { Events, ActivityType, WebhookClient, ChannelType } = require('discord.js');
+const { Events, ActivityType, WebhookClient } = require('discord.js');
 const db = require('../db/database.js');
 const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
-// [FIX] Ensure setApiSubscribers and getSupporterSet are imported
-const { fetchSupporterIds, isSupporter, setApiSubscribers, getSupporterSet } = require('../utils/supporterManager.js');
+const { fetchSupporterIds, isSupporter, setApiSubscribers, getSupporterSet, refreshSupportedGuilds, isGroupSupported } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
 
 const PREMIUM_SKU_ID = '1436488229455925299';
-
-async function primeMemberCache(client) {
-    console.log('[Cache] Starting background member cache priming for all guilds...');
-    const guilds = Array.from(client.guilds.cache.values());
-    for (const guild of guilds) {
-        try {
-            if (guild.memberCount === guild.members.cache.size) continue;
-            await guild.members.fetch({ time: 10000 });
-        } catch (error) {
-            if (error.code === 'GuildMembersTimeout') {
-                try {
-                    await guild.members.fetch({ time: 30000 });
-                } catch (retryError) {
-                    console.warn(`[Cache] FAILED retry for "${guild.name}" (${guild.id}): ${retryError.message}`);
-                }
-            } else {
-                console.warn(`[Cache] Could not fetch members for guild "${guild.name}" (${guild.id}). Error: ${error.message}`);
-            }
-        }
-    }
-    console.log('[Cache] Background member cache priming complete.');
-}
 
 async function manageDevServerRole(client) {
     const devGuildId = process.env.DEV_GUILD_ID; 
@@ -39,7 +16,6 @@ async function manageDevServerRole(client) {
         const guild = await client.guilds.fetch(devGuildId).catch(() => null);
         if (!guild) return;
 
-        // 1. Setup the Role
         let role = guild.roles.cache.find(r => r.name === 'Supporter');
         if (!role) {
             console.log('[Role-Sync] "Supporter" role not found in Dev server. Creating it...');
@@ -59,25 +35,19 @@ async function manageDevServerRole(client) {
 
         const allSupporters = getSupporterSet();
         
-        // 2. [THE FIX] Smart Fetching
-        // Check if we already have all members cached (from primeMemberCache).
         if (guild.memberCount !== guild.members.cache.size) {
             try {
-                // Try to fetch.
                 await guild.members.fetch({ time: 10000 });
             } catch (err) {
-                // If it fails (packet drop), try ONE more time with a longer timeout.
                 console.warn(`[Role-Sync] Initial fetch dropped for Dev Guild. Retrying...`);
                 try {
                     await guild.members.fetch({ time: 30000 });
                 } catch (retryErr) {
                     console.error(`[Role-Sync] Failed to fetch members after retry: ${retryErr.message}`);
-                    // Don't return; try to work with whatever cache we have.
                 }
             }
         }
 
-        // Use the cache (which is now populated)
         const members = guild.members.cache;
 
         for (const [memberId, member] of members) {
@@ -100,20 +70,14 @@ async function manageDevServerRole(client) {
     }
 }
 
-// --- [FIXED] Combined Subscription Logic ---
 async function syncGlobalSubscriptions(client) {
     console.log('[Subscriptions] Starting global sync...');
     
     try {
-        // 1. Fetch ALL entitlements
         const entitlements = await client.application.entitlements.fetch();
-        
-        // 2. Filter for Active + Your SKU. IMPORTANT: Use .isActive()
         const activeSubs = entitlements.filter(e => e.skuId === PREMIUM_SKU_ID && e.isActive());
-        
         const subscriberUserIds = [];
         
-        // 3. Transaction to update Guild DB safely
         const updateSubscriptionDb = db.transaction((subs) => {
             db.prepare('DELETE FROM guild_subscriptions').run();
             const insertStmt = db.prepare('INSERT OR REPLACE INTO guild_subscriptions (guild_id, is_active, expires_at, updated_at) VALUES (?, 1, ?, ?)');
@@ -132,13 +96,9 @@ async function syncGlobalSubscriptions(client) {
         });
 
         const processedGuilds = updateSubscriptionDb(activeSubs);
-        
-        // 4. Update Supporter Manager with User IDs
         setApiSubscribers(subscriberUserIds);
 
         console.log(`[Subscriptions] Synced. Active Guilds: ${processedGuilds}, Active Users: ${subscriberUserIds.length}`);
-
-        // 5. Handle Dev Server Role Logic
         await manageDevServerRole(client);
 
     } catch (error) {
@@ -148,67 +108,34 @@ async function syncGlobalSubscriptions(client) {
 
 async function runDailyVoteReminder(client) {
     console.log('[Tasks] It is noon in Las Vegas! Starting daily vote reminder task...');
-    await fetchSupporterIds();
     
+    // Refresh lists and find where supporters are located
+    await fetchSupporterIds();
+    await refreshSupportedGuilds(client);
+
     const votePayload = createVoteMessage();
     votePayload.username = 'RelayBot';
     votePayload.avatarURL = client.user.displayAvatarURL();
     
-    const allLinkedGuilds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels').all();
-    if (allLinkedGuilds.length === 0) return;
+    const allLinkedGroups = db.prepare('SELECT DISTINCT group_id FROM linked_channels').all();
 
-    console.log(`[Tasks] Checking ${allLinkedGuilds.length} unique server(s) for supporters...`);
-    
-    const guildsWithoutSupporters = new Set();
+    for (const groupRow of allLinkedGroups) {
+        // [OPTIMIZATION] Use the instant check. If group has supporter, skip reminder.
+        if (isGroupSupported(groupRow.group_id)) {
+            continue;
+        }
 
-    for (const guildInfo of allLinkedGuilds) {
-        let hasSupporter = false;
-        
-        // Check DB Subscription first
-        const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(guildInfo.guild_id);
-        if (subscription) {
-            hasSupporter = true;
-        } else {
+        // Group is NOT supported, send reminder to all channels in group
+        const channelsToSendTo = db.prepare('SELECT channel_id, webhook_url FROM linked_channels WHERE group_id = ?').all(groupRow.group_id);
+
+        for (const channelInfo of channelsToSendTo) {
             try {
-                const guild = await client.guilds.fetch(guildInfo.guild_id);
-                if (!guild) {
-                    // Cleanup deleted guilds
-                    db.prepare('DELETE FROM relay_groups WHERE owner_guild_id = ?').run(guildInfo.guild_id);
-                    db.prepare('DELETE FROM linked_channels WHERE guild_id = ?').run(guildInfo.guild_id);
-                    db.prepare('DELETE FROM role_mappings WHERE guild_id = ?').run(guildInfo.guild_id);
-                    continue;
-                }
-                // Check cache first for supporters
-                const supporterSet = getSupporterSet();
-                if (guild.members.cache.some(m => supporterSet.has(m.id))) {
-                    hasSupporter = true;
-                } else {
-                     // Only fetch if cache check fails
-                    const members = await guild.members.fetch({ time: 120000 });
-                    hasSupporter = members.some(member => !member.user.bot && isSupporter(member.id));
-                }
+                const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
+                await webhookClient.send(votePayload);
             } catch (error) {
-                // If error (timeout/network), assume supporter to be safe and avoid spamming
-                hasSupporter = true; 
-            }
-        }
-
-        if (!hasSupporter) {
-            guildsWithoutSupporters.add(guildInfo.guild_id);
-        }
-    }
-    
-    if (guildsWithoutSupporters.size === 0) return;
-    
-    const channelsToSendTo = db.prepare(`SELECT channel_id, webhook_url FROM linked_channels WHERE guild_id IN (${Array.from(guildsWithoutSupporters).map(id => `'${id}'`).join(',')})`).all();
-
-    for (const channelInfo of channelsToSendTo) {
-        try {
-            const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
-            await webhookClient.send(votePayload);
-        } catch (error) {
-            if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
-                db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
+                if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
+                    db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
+                }
             }
         }
     }
@@ -264,24 +191,23 @@ module.exports = {
         console.log(`Ready! Logged in as ${client.user.tag}`);
         client.user.setActivity(`/relay help | v${version}`, { type: ActivityType.Watching });
 
-        // 1. Await Member Cache (Fixes startup race condition)
-        await primeMemberCache(client);
-
-        // 2. Await Initial Supporter Fetch (Fixes rate limit bugs)
+        // 1. Fetch Data
         await fetchSupporterIds();
-
-        // 3. Await Initial Subscription/Dev Role Sync (Fixes premium features)
-        // [THE FIX] This defines the function call that was missing/undefined in your error
         await syncGlobalSubscriptions(client);
 
+        // 2. [OPTIMIZATION] Build the guild cache once on startup
+        await refreshSupportedGuilds(client);
+
+        const thirtyMs = 30 * 60 * 1000;
         const oneHourInMs = 60 * 60 * 1000;
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
-        // Scheduled Tasks
-        setInterval(fetchSupporterIds, oneHourInMs);
-        
-        // Run sync periodically
-        setInterval(() => syncGlobalSubscriptions(client), oneHourInMs);
+        // 3. Refresh data periodically
+        setInterval(async () => {
+            await fetchSupporterIds();
+            await syncGlobalSubscriptions(client);
+            await refreshSupportedGuilds(client);
+        }, thirtyMs);
 
         setInterval(() => {
             const channelsToClean = db.prepare('SELECT channel_id, delete_delay_hours FROM linked_channels WHERE delete_delay_hours > 0').all();

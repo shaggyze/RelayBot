@@ -1,14 +1,13 @@
 // commands/stats.js
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const db = require('../db/database.js');
+const { getSupporterSet, isGroupSupported } = require('../utils/supporterManager.js'); 
 const { getRateLimitDayString } = require('../utils/time.js');
-const { getSupporterSet } = require('../utils/supporterManager.js'); 
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('stats')
-        .setDescription('Shows activity statistics for the relay group linked to this channel.'),
-
+        .setDescription('Shows activity statistics for the relay group linked to this channel.')
 
     async execute(interaction) {
         if (!interaction.inGuild()) {
@@ -19,19 +18,13 @@ module.exports = {
         const channelId = interaction.channel.id;
         
         try {
-            // 1. Find the group linked to the current channel
             const linkInfo = db.prepare('SELECT group_id FROM linked_channels WHERE channel_id = ?').get(channelId);
 
             if (!linkInfo) {
                 return interaction.editReply({ content: '❌ **Error:** This channel is not linked to any relay group. You must run `/relay link_channel` first.' });
             }
             
-            const groupId = linkInfo.group_id;
-            const group = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(groupId);
-            const groupNameDisplay = group ? group.group_name : 'Unknown Group';
-
-            // 2. Calculate Stats
-            const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId).map(row => row.guild_id);
+            const uniqueGuildIds = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(linkInfo.group_id).map(row => row.guild_id);
 
             let totalMembers = 0;
             let accessibleServerCount = 0;
@@ -54,18 +47,29 @@ module.exports = {
                     } catch (fetchError) {
                         totalMembers += guild.memberCount; 
                         accessibleServerCount++;
+                        guild.members.cache.forEach(member => {
+                            if (supporterSet.has(member.user.id)) {
+                                uniqueSupporterIds.add(member.user.id);
+                            }
+                        });
                     }
                 }
             }
             
             const totalSupporters = uniqueSupporterIds.size;
+
             const serverCount = uniqueGuildIds.length;
-            const channelCount = db.prepare('SELECT COUNT(channel_id) as count FROM linked_channels WHERE group_id = ?').get(groupId).count;
+            const channelCount = db.prepare('SELECT COUNT(channel_id) as count FROM linked_channels WHERE group_id = ?').get(linkInfo.group_id).count;
             
             const groupStatsSummary = db.prepare(`
-                SELECT SUM(character_count) as total_chars, COUNT(DISTINCT day) as active_days, MIN(day) as first_active_day, MAX(day) as last_active_day
-                FROM group_stats WHERE group_id = ?
-            `).get(groupId);
+                SELECT 
+                    SUM(character_count) as total_chars, 
+                    COUNT(DISTINCT day) as active_days,
+                    MIN(day) as first_active_day,
+                    MAX(day) as last_active_day
+                FROM group_stats
+                WHERE group_id = ?
+            `).get(linkInfo.group_id);
 
             const totalChars = groupStatsSummary?.total_chars || 0;
             const activeDays = groupStatsSummary?.active_days || 0;
@@ -74,10 +78,11 @@ module.exports = {
             const dailyAvg = (activeDays > 0) ? Math.round(totalChars / activeDays) : 0;
 
             const todayString = getRateLimitDayString();
-            const todaysGroupStats = db.prepare('SELECT warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(groupId, todayString);
+            const todaysGroupStats = db.prepare('SELECT warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(linkInfo.group_id, todayString);
             
+            // [THE FIX] Use efficient cache check for status
             let statusValue = '';
-            if (totalSupporters > 0) {
+            if (isGroupSupported(linkInfo.group_id)) {
                 statusValue = '✅ Active (Supporter Bypass)';
             } else if (todaysGroupStats && todaysGroupStats.warning_sent_at) {
                 statusValue = '🔴 Paused (Daily Limit Reached)';
@@ -86,7 +91,7 @@ module.exports = {
             }
             
             const statsEmbed = new EmbedBuilder()
-                .setTitle(`📊 Relay Group Statistics`) // Generic Title for Public
+                .setTitle(`📊 Relay Group Statistics`)
                 .setColor('#5865F2')
                 .addFields(
                     { name: 'Status', value: statusValue, inline: true }, 
@@ -107,8 +112,7 @@ module.exports = {
 
         } catch (error) {
             console.error('Error in /stats command:', error);
-            await interaction.editReply({ content: 'An unexpected error occurred while fetching statistics.' });
+            await interaction.editReply({ content: 'An unexpected error occurred while fetching statistics. Please check the logs.' });
         }
     },
-    // Autocomplete removed as it is no longer needed here
 };

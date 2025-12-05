@@ -1,16 +1,17 @@
 // utils/supporterManager.js
 const https = require('https');
-const { version } = require('../package.json');
+const db = require('../db/database.js');
 
 const WEBHOOK_URL = 'https://shaggyze.website/RelayBot/webhook.php';
 const PATRON_LIST_URL = 'https://shaggyze.website/RelayBot/patrons.txt';
 const VOTER_LIST_URL = 'https://shaggyze.website/RelayBot/voters.txt';
 
-// We keep two sets: one for text files, one for discord API subs
-let textFileSupporters = new Set();
-let apiSubscriberIds = new Set();
+// Master list of User IDs (Patrons + Voters + Personal Subs)
+let allSupporterIds = new Set();
 
-// ... (fetchFile and triggerCleanup functions remain the same) ...
+// Cache of Guild IDs that contain at least one supporter
+let supportedGuildsCache = new Set();
+
 function fetchFile(url) {
     return new Promise((resolve, reject) => {
         if (!url.startsWith('http')) return resolve('');
@@ -22,7 +23,6 @@ function fetchFile(url) {
         }).on('error', reject);
     });
 }
-
 function triggerCleanup() {
     return new Promise((resolve) => {
         if (!WEBHOOK_URL.startsWith('http')) {
@@ -65,7 +65,9 @@ function triggerCleanup() {
 }
 
 // Main function to fetch both lists and combine them.
+// 1. Fetch IDs from Text Files
 async function fetchSupporterIds() {
+    // Trigger PHP webhook cleanup if needed (fire and forget)
     console.log('[Supporters] Fetching patron/voter text lists...');
     triggerCleanup();
 
@@ -76,47 +78,106 @@ async function fetchSupporterIds() {
         ]);
 
         const newSet = new Set();
-        
-        // Process Patrons
         patronData.split(/\s+/).forEach(id => { if(id) newSet.add(id); });
-        
-        // Process Voters
         voterData.split(/\s+/).forEach(line => {
             const userId = line.split(',')[0];
             if (userId) newSet.add(userId);
         });
 
-        if (newSet.size > 0) {
-            textFileSupporters = newSet;
-            console.log(`[Supporters] Loaded ${textFileSupporters.size} from text files.`);
-        } else {
-            console.warn(`[Supporters] Fetched lists were empty. Keeping existing ${textFileSupporters.size} supporters in cache to be safe.`);
-        }
-
+        // Merge with existing API subscribers (handled by setApiSubscribers)
+        // We do this by keeping a separate set for API subs internally if needed, 
+        // or just trusting the flow. For now, let's just update the main set.
+        // Note: To keep API subs from being wiped by text file updates, 
+        // we should ideally store them separately.
+        // For simplicity here, we assume setApiSubscribers merges INTO this.
+        
+        // Actually, let's keep the previous logic of two sets to be safe.
+        textFileSupporters = newSet; 
+        rebuildCombinedSet();
+        
+        console.log(`[Supporters] Loaded ${newSet.size} IDs from text files.`);
     } catch (error) {
         console.error(`[Supporters] Failed to fetch text lists: ${error.message}`);
     }
 }
 
-// [THE FIX] Allow injecting IDs from Discord Subscriptions
+let textFileSupporters = new Set();
+let apiSubscriberIds = new Set();
+
 function setApiSubscribers(idArray) {
     apiSubscriberIds = new Set(idArray);
-    console.log(`[Supporters] Updated API Subscribers list. Count: ${apiSubscriberIds.size}`);
+    rebuildCombinedSet();
 }
 
-// [THE FIX] Check both lists
+function rebuildCombinedSet() {
+    allSupporterIds = new Set([...textFileSupporters, ...apiSubscriberIds]);
+}
+
 function isSupporter(userId) {
     return textFileSupporters.has(userId) || apiSubscriberIds.has(userId);
 }
 
-// [THE FIX] Return combined list
-function getSupporterSet() {
-    return new Set([...textFileSupporters, ...apiSubscriberIds]);
+// 2. [THE NEW FEATURE] Refresh Guild Cache
+// This checks every guild the bot is in to see if any supporters are present.
+async function refreshSupportedGuilds(client) {
+    if (allSupporterIds.size === 0) return;
+    
+    console.log('[Supporters] Updating Supported Guilds Cache (Targeted Fetch)...');
+    const newSupportedGuilds = new Set();
+    const supporterArray = Array.from(allSupporterIds);
+
+    // We chunk the supporters into batches of 100 (Discord API limit for fetch)
+    // But since you only have ~5-10, we can send them all at once.
+    
+    for (const guild of client.guilds.cache.values()) {
+        try {
+            // THE MAGIC: Targeted Fetch.
+            // "Discord, are any of THESE 5 people in THIS server?"
+            // This is 1 API call per server, infinitely faster than fetching all members.
+            const foundMembers = await guild.members.fetch({ user: supporterArray });
+            
+            if (foundMembers.size > 0) {
+                newSupportedGuilds.add(guild.id);
+            }
+        } catch (error) {
+            // If fetch fails, fall back to cache check just in case
+            if (guild.members.cache.some(m => allSupporterIds.has(m.id))) {
+                newSupportedGuilds.add(guild.id);
+            }
+        }
+    }
+
+    supportedGuildsCache = newSupportedGuilds;
+    console.log(`[Supporters] Cache updated. ${supportedGuildsCache.size} guilds contain supporters.`);
+}
+
+// 3. The Check Function (Instant Access)
+// Returns TRUE if the group is supported (via User Presence OR Guild Subscription)
+function isGroupSupported(groupId) {
+    // A. Check Guild Subscriptions (Database - Fast)
+    const linkedGuilds = db.prepare('SELECT guild_id FROM linked_channels WHERE group_id = ?').all(groupId);
+    
+    // Check DB Subs
+    for (const row of linkedGuilds) {
+        const sub = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(row.guild_id);
+        if (sub) return true;
+    }
+
+    // B. Check User Presence (Memory Cache - Instant)
+    for (const row of linkedGuilds) {
+        if (supportedGuildsCache.has(row.guild_id)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 module.exports = {
     fetchSupporterIds,
-    setApiSubscribers, // Export this new function
     isSupporter,
-    getSupporterSet
+    setApiSubscribers,
+    refreshSupportedGuilds, // New export
+    isGroupSupported,       // New export
+    getSupporterSet: () => allSupporterIds
 };

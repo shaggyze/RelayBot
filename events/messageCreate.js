@@ -3,6 +3,7 @@ const { Events, WebhookClient, Collection, PermissionFlagsBits, EmbedBuilder, Me
 const db = require('../db/database.js');
 const crypto = require('crypto');
 const relayQueue = require('../utils/relayQueue.js');
+const { isGroupSupported } = require('../utils/supporterManager.js');
 
 const webhookCache = new Collection();
 const MAX_PAYLOAD_SIZE = 6.0 * 1024 * 1024; 
@@ -11,57 +12,10 @@ const RATE_LIMIT_CHARS = 100000;
 const DISCORD_MESSAGE_LIMIT = 2000;
 
 const groupsBeingWarned = new Set();
-const dailySupporterCache = new Map();
 
 const createVoteMessage = () => ({ content: "Please vote/subscribe to increase limits!", embeds: [] });
-const isSupporter = (id) => false;
-const getSupporterSet = () => new Set();
 const getRateLimitDayString = () => new Date().toISOString().slice(0, 10);
 const RESET_HOUR_UTC = 19;
-
-async function checkGroupForSupporters(client, groupId) {
-    const currentDay = getRateLimitDayString();
-    if (dailySupporterCache.get(groupId) === currentDay) return true;
-    
-    const supporterIdList = getSupporterSet();
-    const guildsInGroup = db.prepare('SELECT DISTINCT guild_id FROM linked_channels WHERE group_id = ?').all(groupId);
-    
-    // 1. Check DB Subscriptions
-    for (const row of guildsInGroup) {
-        const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(row.guild_id);
-        if (subscription) { 
-            dailySupporterCache.set(groupId, currentDay); 
-            return true; 
-        }
-    }
-
-    // 2. Check User Patrons
-    if (supporterIdList.size > 0) {
-        for (const row of guildsInGroup) {
-            try {
-                const guild = client.guilds.cache.get(row.guild_id);
-                if (!guild) continue;
-
-                if (guild.members.cache.some(member => supporterIdList.has(member.id))) { 
-                    dailySupporterCache.set(groupId, currentDay); 
-                    return true; 
-                }
-
-                const supporterArray = Array.from(supporterIdList);
-                if (supporterArray.length <= 50) {
-                    try {
-                        const fetchedMembers = await guild.members.fetch({ user: supporterArray });
-                        if (fetchedMembers.size > 0) { 
-                            dailySupporterCache.set(groupId, currentDay); 
-                            return true; 
-                        }
-                    } catch (e) {}
-                }
-            } catch (error) { return true; } // Fail open on error
-        }
-    }
-    return false;
-}
 
 module.exports = {
     name: Events.MessageCreate,
@@ -69,29 +23,23 @@ module.exports = {
         const executionId = crypto.randomBytes(4).toString('hex');
 
         try {
+            // 1. Always ignore DMs.
             if (!message.guild) return;
 
-            // --- MASTER SELF-IGNORE (THE FIX) ---
-            
-            // Check 1: Is the message tagged with our Application ID? 
-            // (This catches ALL webhooks created by this bot).
+            // 2. MASTER SELF-IGNORE
             if (message.applicationId === message.client.user.id) return;
-
-            // Check 2: Is the author the bot user itself?
-            // (This catches standard messages sent by the bot user).
             if (message.author.id === message.client.user.id) return;
             
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
             if (!sourceChannelInfo) return;
 
-            // --- CONDITIONAL IGNORE for OTHER bots/webhooks ---
+            // 3. CONDITIONAL IGNORE (Process Bots)
             const processBots = sourceChannelInfo.process_bot_messages; 
-
-            // If setting is OFF (0/null), ignore other bots/webhooks.
             if (!processBots && (message.author.bot || message.webhookId)) {
                 return; 
             }
 
+            // 4. Blacklist Check
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
 				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
@@ -112,32 +60,38 @@ module.exports = {
                 db.prepare(`INSERT INTO group_stats (group_id, day, character_count) VALUES (?, ?, ?) ON CONFLICT(group_id, day) DO UPDATE SET character_count = character_count + excluded.character_count`).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
             }
 
-            const isSupporterGroup = await checkGroupForSupporters(message.client, sourceChannelInfo.group_id);
+            // --- Rate Limit Logic (Optimized) ---
+            // [THE FIX] Use the cached check. No API calls.
+            const isSupporterGroup = isGroupSupported(sourceChannelInfo.group_id);
+            
             const stats = db.prepare('SELECT character_count, warning_sent_at FROM group_stats WHERE group_id = ? AND day = ?').get(sourceChannelInfo.group_id, rateLimitDayString);
             
             if (!isSupporterGroup && stats && stats.character_count > RATE_LIMIT_CHARS) {
-                const subscription = db.prepare('SELECT 1 FROM guild_subscriptions WHERE guild_id = ? AND is_active = 1').get(message.guild.id);
-                if (!subscription) {
-                    if (groupsBeingWarned.has(sourceChannelInfo.group_id)) return;
-                    if (!stats.warning_sent_at) {
-                        try {
-                            groupsBeingWarned.add(sourceChannelInfo.group_id);
-                            console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" exceeded limit. Sending warning.`);
-                            const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
-                            const warningPayload = createVoteMessage(); 
-                            warningPayload.username = 'RelayBot';
-                            warningPayload.avatarURL = message.client.user.displayAvatarURL();
-                            warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume next reset or when a supporter joins.`;
-                            for (const target of allTargetChannels) {
-                                relayQueue.add(target.webhook_url, warningPayload, db, { targetChannelId: 'WARNING_SYSTEM' });
-                            }
-                            db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
-                        } finally {
-                            groupsBeingWarned.delete(sourceChannelInfo.group_id);
+                if (groupsBeingWarned.has(sourceChannelInfo.group_id)) return;
+
+                if (!stats.warning_sent_at) {
+                    try {
+                        groupsBeingWarned.add(sourceChannelInfo.group_id);
+                        console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" exceeded limit. Sending warning.`);
+                        const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                        const now = new Date();
+                        const nextResetTime = new Date();
+                        nextResetTime.setUTCHours(RESET_HOUR_UTC, 0, 0, 0);
+                        if (now > nextResetTime) { nextResetTime.setUTCDate(nextResetTime.getUTCDate() + 1); }
+                        const timerString = `<t:${Math.floor(nextResetTime.getTime() / 1000)}:R>`;
+                        const warningPayload = createVoteMessage(); 
+                        warningPayload.username = 'RelayBot';
+                        warningPayload.avatarURL = message.client.user.displayAvatarURL();
+                        warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume next reset or when a supporter joins.`;
+                        for (const target of allTargetChannels) {
+                            relayQueue.add(target.webhook_url, warningPayload, db, { targetChannelId: 'WARNING_SYSTEM' });
                         }
+                        db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
+                    } finally {
+                        groupsBeingWarned.delete(sourceChannelInfo.group_id);
                     }
-                    return; 
                 }
+                return; 
             }
 
 			const senderName = message.member?.displayName ?? message.author.username;
@@ -170,13 +124,12 @@ module.exports = {
                 try {
                     const targetChannelName = message.client.channels.cache.get(target.channel_id)?.name ?? target.channel_id;
                     
-                    // --- Reply Embed Logic B0B8C6 ---
+                    // --- Reply Logic ---
                     if (message.reference && message.reference.messageId) {
                         let repliedMessage;
                         try {
                             repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                         } catch {
-                            // Fallback if original is deleted/inaccessible
                             replyEmbed = new EmbedBuilder().setColor('#B0B8C6').setDescription('*Replying to a deleted or inaccessible message.*');
                         }
                         
@@ -186,30 +139,23 @@ module.exports = {
                             let repliedContent = repliedMessage.content ? repliedMessage.content.substring(0, 1000) : '*(Message had no text content)*';
                             if (repliedMessage.editedTimestamp) repliedContent += ' *(edited)*';
 
-                            // 1. Find the Root Original ID
-                            // Check if the message we replied to was itself a relayed message.
                             const repliedToId = repliedMessage.id;
                             const parentInfo = db.prepare('SELECT original_message_id FROM relayed_messages WHERE relayed_message_id = ?').get(repliedToId);
                             const rootOriginalId = parentInfo ? parentInfo.original_message_id : repliedToId;
 
-                            // 2. Try to find the sibling message in the CURRENT target channel
                             const relayedReplyInfo = db.prepare('SELECT relayed_message_id FROM relayed_messages WHERE original_message_id = ? AND relayed_channel_id = ?').get(rootOriginalId, target.channel_id);
 
                             let messageLink = null;
                             if (relayedReplyInfo && relayedReplyInfo.relayed_message_id) {
-                                // Success: We found the copy in this specific target server. Link to it.
                                 messageLink = `https://discord.com/channels/${target.guild_id}/${target.channel_id}/${relayedReplyInfo.relayed_message_id}`;
                             } else {
-                                // Fallback: Link to the root original message (cross-server link)
-                                // We try to find the original channel ID from the DB or use the replied message's url
                                 const originalMessageInfo = db.prepare('SELECT original_channel_id FROM relayed_messages WHERE original_message_id = ? LIMIT 1').get(rootOriginalId);
-                                if (originalMessageInfo) {
+                                if(originalMessageInfo) {
                                     const originalGuildId = message.client.channels.cache.get(originalMessageInfo.original_channel_id)?.guild.id;
-                                    if (originalGuildId) {
+                                    if(originalGuildId) {
                                         messageLink = `https://discord.com/channels/${originalGuildId}/${originalMessageInfo.original_channel_id}/${rootOriginalId}`;
                                     }
                                 }
-                                // If DB lookup failed (e.g. pruned), use the direct link to the message we replied to
                                 if (!messageLink) messageLink = repliedMessage.url;
                             }
                             
@@ -218,7 +164,6 @@ module.exports = {
                                 .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                 .setDescription(repliedContent);
                             
-                            // Create the ping string for the content
                             replyPing = `<@${repliedMessage.author.id}> `;
                         }
                     }
@@ -262,7 +207,7 @@ module.exports = {
 
                     let finalPayloadContent = replyPing + finalContent;
 
-                    // --- Attachments / Voice / Forwarded ---
+                    // --- Attachments / Voice / Forwarded Logic ---
                     let fileNoticeString = "";
                     const sortedAttachments = Array.from(message.attachments.values()).sort((a, b) => a.size - b.size);
                     
@@ -352,12 +297,12 @@ module.exports = {
                         repliedToId: message.reference ? message.reference.messageId : null,
                         targetChannelId: target.channel_id,
                         executionId: executionId,
-                        stickerData: stickerData // [THE FIX] Comma added here
+                        stickerData: stickerData 
                     };
 
                     relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta);
 
-              } catch (error) {
+                 } catch (error) {
                     if (error.code === 40005) shouldLogVerbose = true; 
 
                     const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;

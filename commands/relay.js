@@ -246,69 +246,108 @@ module.exports = {
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelId);
                 await interaction.editReply({ content: `✅ This channel has been unlinked. Found and deleted ${deletedCount} bot-owned webhook(s).` });
 
-            } else if (subcommand === 'list_servers') {
+} else if (subcommand === 'list_servers') {
                 await interaction.deferReply({ ephemeral: true });
                 const groupName = interaction.options.getString('group_name');
                 const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
                 if (!group) return interaction.editReply({ content: `❌ No global group named "**${groupName}**" exists.` });
 
-                const allLinks = db.prepare('SELECT guild_id, channel_id, direction FROM linked_channels WHERE group_id = ?').all(group.group_id);
+                // Fetch links including the Webhook URL
+                const allLinks = db.prepare('SELECT guild_id, channel_id, direction, webhook_url FROM linked_channels WHERE group_id = ?').all(group.group_id);
                 
                 const guildsToChannels = new Map();
                 
-                // Populate the map with all linked guilds and their channels
+                // Fetch owner info
+                const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
+                let ownerInfoString = '';
+                if (ownerGuild) {
+                    try {
+                        const ownerUser = await ownerGuild.fetchOwner(); 
+                        ownerInfoString = ownerUser ? ` (Owner: ${ownerUser.user.tag} ID: \`${ownerUser.user.id}\`)` : ` (Owner: Unknown - Guild Owner ID: \`${group.owner_guild_id}\`)`;
+                    } catch (e) {
+                        ownerInfoString = ` (Owner: Unknown - Guild Owner ID: \`${group.owner_guild_id}\`)`;
+                    }
+                } else {
+                    ownerInfoString = ` (Owner: Unknown Server ID: \`${group.owner_guild_id}\`)`;
+                }
+
+                // Populate Map
                 for (const link of allLinks) {
                     if (!guildsToChannels.has(link.guild_id)) {
                         guildsToChannels.set(link.guild_id, []);
                     }
-                    guildsToChannels.get(link.guild_id).push({ id: link.channel_id, dir: link.direction });
+                    guildsToChannels.get(link.guild_id).push({ 
+                        id: link.channel_id, 
+                        dir: link.direction,
+                        url: link.webhook_url 
+                    });
                 }
                 
                 let description = '';
+                
+                // Iterate Guilds
                 for (const [guildId, channelInfos] of guildsToChannels.entries()) {
                     const guild = interaction.client.guilds.cache.get(guildId);
                     let guildDisplay = '';
-                    let ownerDetails = ''; // To store the owner's name and ID
 
                     if (guild) {
-                        try {
-                            const ownerUser = await guild.fetchOwner(); // Fetch the owner for THIS guild
-                            if (ownerUser && ownerUser.user) { // Ensure ownerUser and its user property exist
-                                ownerDetails = ` (Owner: ${ownerUser.user.tag} ID: \`${ownerUser.user.id}\`)`;
-                            } else if (ownerUser) { // Fallback if ownerUser is fetched but user property is not there
-                                ownerDetails = ` (Owner: ${ownerUser.tag} ID: \`${ownerUser.id}\`)`; // Use tag if available
-                            } else {
-                                ownerDetails = ` (Owner: Unknown User ID: \`${guild.ownerId}\`)`;
-                            }
-                        } catch (e) {
-                            console.warn(`[LIST_SERVERS] Failed to fetch owner for guild ${guild.name} (${guildId}): ${e.message}`);
-                            ownerDetails = ` (Owner: Unknown User ID: \`${guild.ownerId}\`)`;
-                        }
-                        
-                        const memberCount = guild.memberCount;
-                        const supporterCount = guild.members.cache.filter(member => !member.user.bot && isSupporter(member.id)).size;
-                        
-                        // Append owner info to every guild line where the bot is present.
-                        guildDisplay = `• **${guild.name}** (ID: \`${guildId}\`)${ownerDetails}`;
+                        guildDisplay = `• **${guild.name}** (ID: \`${guildId}\`)${guildId === group.owner_guild_id ? ownerInfoString : ''}`;
                     } else {
-                        // For inaccessible guilds (bot not in server), we can only display the stored owner ID.
-                        guildDisplay = `• **Unknown Server** (ID: \`${guildId}\`) (Owner: Unknown User ID: \`${guild.ownerId || 'N/A'}\`)`;
+                        guildDisplay = `• **Unknown Server** (ID: \`${guildId}\`)${group.owner_guild_id === guildId ? ownerInfoString : ''}`;
                     }
                     description += guildDisplay + '\n';
                     
                     if (channelInfos.length > 0) {
                         for (const info of channelInfos) {
                             const channel = interaction.client.channels.cache.get(info.id);
-                            const directionFormatted = `(Direction: **${info.dir}**)`;
-                            description += `  └─ ${channel ? `<#${info.id}> (#${channel.name}) (ID: \`${info.id}\`)` : `Inaccessible Channel (ID: \`${info.id}\`)`} ${directionFormatted}\n`;
+                            const directionFormatted = `(Dir: **${info.dir}**)`;
+                            
+                            // --- WEBHOOK HEALTH CHECK & REPAIR ---
+                            let webhookStatus = '❓';
+                            
+                            try {
+                                // Extract ID and Token
+                                const match = info.url.match(/\/webhooks\/(\d+)\/(.+)/);
+                                if (!match) throw new Error("Malformed URL");
+                                
+                                const [_, hookId, hookToken] = match;
+                                
+                                // 1. Try to fetch the webhook
+                                await interaction.client.fetchWebhook(hookId, hookToken);
+                                webhookStatus = '✅'; // It exists and is valid
+                            } catch (error) {
+                                if (error.code === 10015 || error.message === "Malformed URL") { // 10015: Unknown Webhook
+                                    // 2. Webhook is dead. Attempt repair.
+                                    try {
+                                        if (channel) {
+                                            // We have access to the channel, let's make a new one
+                                            const newWebhook = await channel.createWebhook({ name: 'RelayBot', reason: `Auto-repair for group ${groupName}` });
+                                            
+                                            // Update DB
+                                            db.prepare('UPDATE linked_channels SET webhook_url = ? WHERE channel_id = ?').run(newWebhook.url, info.id);
+                                            webhookStatus = '🔄 **(Fixed)**';
+                                        } else {
+                                            // Bot cannot see the channel (kicked or permissions lost)
+                                            webhookStatus = '❌ **(Bot Missing/No Access)**';
+                                        }
+                                    } catch (repairError) {
+                                        console.error(`[LIST-REPAIR] Failed to repair ${info.id}:`, repairError.message);
+                                        webhookStatus = '❌ **(Repair Failed)**';
+                                    }
+                                } else {
+                                    webhookStatus = '⚠️ **(API Error)**';
+                                }
+                            }
+                            
+                            description += `  └─ ${channel ? `<#${info.id}>` : `Unknown Channel (\`${info.id}\`)`} ${directionFormatted} [Webhook: ${webhookStatus}]\n`;
                         }
                     } else {
                         description += `  └─ *(No channels linked from this server)*\n`;
                     }
                 }
-				if (description.trim() === '') {
-                    description = 'No servers are currently linked to this group.';
-                }
+                
+                if (description.trim() === '') description = 'No servers are currently linked to this group.';
+
                 const listEmbed = new EmbedBuilder().setTitle(`Servers & Channels in Group "${groupName}"`).setColor('#5865F2').setDescription(description.trim());
                 await interaction.editReply({ embeds: [listEmbed] });
 
