@@ -396,7 +396,19 @@ module.exports = {
                 if (totalSupporters > 0) { statusValue = '✅ Active (Supporter Bypass)'; } 
                 else if (todaysGroupStats && todaysGroupStats.warning_sent_at) { statusValue = '🔴 Paused (Daily Limit Reached)'; } 
                 else { statusValue = '🟢 Active'; }
+
+                // Format Supporter List
+                // Join everyone with a comma.
+                let supporterListString = Array.from(uniqueSupporterTags).join(', ');
+
+                // Discord Embed Field Limit is 1024 characters.
+                // Only truncate if the generated string is actually too long for Discord.
+                if (supporterListString.length > 1024) {
+                    supporterListString = supporterListString.substring(0, 1000) + '... (list truncated)';
+                }
                 
+                if (supporterListString === '') supporterListString = 'None';
+
                 const statsEmbed = new EmbedBuilder()
                     .setTitle(`📊 Relay Group Statistics for "${groupNameDisplay}"`)
                     .setColor('#5865F2')
@@ -410,7 +422,9 @@ module.exports = {
                         { name: 'First Activity', value: `${firstActiveDay}`, inline: true },
                         { name: 'Last Activity', value: `${lastActiveDay}`, inline: true },
                         { name: 'Total Chars Relayed', value: `${(totalChars || 0).toLocaleString()}`, inline: true },
-                        { name: 'Daily Average Chars', value: `${dailyAvg.toLocaleString()}`, inline: true }
+                        { name: 'Daily Average Chars', value: `${dailyAvg.toLocaleString()}`, inline: true },
+                        // [UPDATED] Shows everyone unless it hits the 1024 char limit
+                        { name: `Active Supporters List (${totalSupporters})`, value: `\`\`\`${supporterListString}\`\`\``, inline: false }
                     )
                     .setFooter({ text: `Owner view.` })
                     .setTimestamp();
