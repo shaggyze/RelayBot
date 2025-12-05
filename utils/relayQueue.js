@@ -96,6 +96,22 @@ class RelayQueue {
                  }
                  this.queue.unshift(item);
             }
+            if (error.code === 50006) {
+                // [THE FIX] Log specific details about the empty payload
+                console.error(`[QUEUE-FAIL][${meta.executionId}] Empty Message Error (50006). Debugging Payload:`);
+                console.error(`- Content Length: ${payload.content ? payload.content.length : 0}`);
+                console.error(`- Files: ${payload.files ? payload.files.length : 0}`);
+                console.error(`- Embeds: ${payload.embeds ? payload.embeds.length : 0}`);
+                console.error(`- Stickers: ${payload.sticker_ids ? payload.sticker_ids.length : 0}`);
+                
+                // If it was a sticker fail, we already handle that.
+                // If it wasn't a sticker, it's likely a stripped attachment (Voice Msg).
+                if (!payload.sticker_ids) {
+                     // Optional: Add a fallback so it retries successfully?
+                     payload.content = "*[Error: Content was empty (likely a large file that was removed)]*";
+                     this.queue.unshift(item);
+                }
+            }
             else {
                 console.error(`[QUEUE-FAIL][${meta.executionId}] Failed to send to ${meta.targetChannelId}: ${error.message}`);
                 if ((error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') && attempt < 3) {

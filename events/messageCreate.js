@@ -303,20 +303,41 @@ module.exports = {
                     relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta);
 
                  } catch (error) {
-                    if (error.code === 40005) shouldLogVerbose = true; 
-
                     const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
                     if (error.code === 10015) {
-                        console.error(`[AUTO-CLEANUP][${executionId}] Webhook for channel #${targetChannelNameForError} is invalid. Removing from relay.`);
+                        console.warn(`[AUTO-REPAIR][${executionId}] Webhook missing for channel #${targetChannelNameForError}. Attempting to repair...`);
+                        
                         try {
-                            const brokenChannel = await message.client.channels.fetch(target.channel_id);
-                            if (brokenChannel) {
-                                await brokenChannel.send("⚠️ **Relay Connection Lost:** The webhook used for relaying messages in this channel was deleted or is invalid.\n\n**Action Required:** This channel has been automatically unlinked. An admin must run `/relay link_channel` to reconnect it.");
+                            // 1. Attempt Repair
+                            const channel = await message.client.channels.fetch(target.channel_id);
+                            // Create new webhook
+                            const newWebhook = await channel.createWebhook({ name: 'RelayBot', reason: 'Auto-repairing deleted webhook' });
+                            
+                            // Update Database
+                            db.prepare('UPDATE linked_channels SET webhook_url = ? WHERE channel_id = ?').run(newWebhook.url, target.channel_id);
+                            console.log(`[AUTO-REPAIR][${executionId}] Success! Repaired webhook for #${targetChannelNameForError}. Retrying send...`);
+                            
+                            // Retry sending the original message
+                            const retryClient = new WebhookClient({ url: newWebhook.url });
+                            await retryClient.send(finalPayloadForSend);
+
+                        } catch (repairError) {
+                            // 2. Repair Failed (Bot missing permissions or kicked)
+                            console.error(`[AUTO-REPAIR-FAIL][${executionId}] Repair failed: ${repairError.message}. Proceeding to cleanup.`);
+                            
+                            // 3. Notify the Channel (if possible)
+                            try {
+                                const brokenChannel = await message.client.channels.fetch(target.channel_id);
+                                if (brokenChannel) {
+                                    await brokenChannel.send("⚠️ **Relay Connection Lost:** The webhook for this channel is invalid and could not be auto-repaired (check bot permissions).\n\n**Action Required:** An admin must run `/relay link_channel` to reconnect.");
+                                }
+                            } catch (notifyError) {
+                                console.warn(`[AUTO-CLEANUP-WARN] Could not notify channel ${target.channel_id}.`);
                             }
-                        } catch (notifyError) {
-                            console.warn(`[AUTO-CLEANUP-WARN] Could not notify channel ${target.channel_id}: ${notifyError.message}`);
+
+                            // 4. Delete the link
+                            db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                         }
-                        db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
                     } else {
                         const errorCode = error.code || 'N/A';
                         const errorMsg = error.message || 'Unknown error occurred';
@@ -326,7 +347,6 @@ module.exports = {
                 }
             }
         } catch (error) {
-            if (error.code === 40005) shouldLogVerbose = true; 
             console.error(`[ERROR] Code:`, error.code);
             console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id} ${error.message}.`, error);
         }

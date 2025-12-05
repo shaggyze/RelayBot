@@ -133,19 +133,51 @@ async function runDailyVoteReminder(client) {
                 const webhookClient = new WebhookClient({ url: channelInfo.webhook_url });
                 await webhookClient.send(votePayload);
             } catch (error) {
-                if (error.code === 10015 || error.code === 10003 || error.code === 50001) {
+                // Handle Invalid Webhook (10015) with Repair -> Notify -> Delete
+                if (error.code === 10015) {
+                    console.warn(`[Tasks] Webhook invalid for channel ${channelInfo.channel_id}. Attempting repair...`);
+                    try {
+                        // 1. Attempt Repair
+                        const channel = await client.channels.fetch(channelInfo.channel_id);
+                        const newWebhook = await channel.createWebhook({ name: 'RelayBot', reason: 'Auto-repair during vote reminder' });
+                        
+                        db.prepare('UPDATE linked_channels SET webhook_url = ? WHERE channel_id = ?').run(newWebhook.url, channelInfo.channel_id);
+                        
+                        // Retry sending the vote reminder
+                        const retryClient = new WebhookClient({ url: newWebhook.url });
+                        await retryClient.send(votePayload);
+                        console.log(`[Tasks] Successfully repaired webhook for channel ${channelInfo.channel_id}`);
+
+                    } catch (repairError) {
+                        console.error(`[Tasks] Repair failed for channel ${channelInfo.channel_id}: ${repairError.message}`);
+
+                        // 2. Notify Channel
+                        try {
+                            const brokenChannel = await client.channels.fetch(channelInfo.channel_id);
+                            if (brokenChannel) {
+                                await brokenChannel.send("⚠️ **Relay Connection Lost:** The webhook for this channel is invalid and could not be auto-repaired.\n\n**Action Required:** An admin must run `/relay link_channel` to reconnect.");
+                            }
+                        } catch (e) { /* Ignore notification errors */ }
+
+                        // 3. Delete Link
+                        db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
+                    }
+                } 
+                // Handle other fatal errors (Unknown Channel/Missing Access) immediately
+                else if (error.code === 10003 || error.code === 50001) {
+                    console.warn(`[Tasks] Channel inaccessible (${error.code}). Removing link for ${channelInfo.channel_id}.`);
                     db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
                 }
             }
         }
     }
-    console.log('[Tasks] Daily vote reminder task finished.');
+    console.log(`[Tasks] Daily vote reminder task finished.  ${channelsToSendTo.length}/${allLinkedGroups.length}`);
 }
 
 function scheduleNextNoonTask(client) {
     const now = new Date();
     const nextRun = new Date();
-    const targetUtcHour = 19;
+    const targetUtcHour = 20;
     const targetUtcMinute = 0;
     nextRun.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
 
