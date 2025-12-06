@@ -295,7 +295,9 @@ module.exports = {
                         for (const info of channelInfos) {
                             const channel = interaction.client.channels.cache.get(info.id);
                             const directionFormatted = `[${info.dir}]`;
-                            const channelDisplay = channel ? `**#${channel.name}** (\`${info.id}\`)` : `Unknown Channel (\`${info.id}\`)`;
+                            const channelDisplay = channel 
+								? `<#${info.id}> (#${channel.name}) (ID: \`${info.id}\`)` 
+								: `<#${info.id}> (Unknown) (ID: \`${info.id}\`)`;
 
                             // --- 2. Webhook Health Check & Repair Logic (RESTORED) ---
                             let webhookStatus = '❓';

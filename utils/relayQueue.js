@@ -82,21 +82,40 @@ class RelayQueue {
                 console.warn(`[QUEUE-429][${meta.executionId}] Rate Limit hit for ${meta.targetChannelId}. Backing off.`);
                 this.queue.unshift(item); 
                 await new Promise(resolve => setTimeout(resolve, 5000));
-            } 
-            else if (error.code === 10015) {
+            } else if (error.code === 10015) {
                 console.error(`[QUEUE-CLEANUP][${meta.executionId}] Webhook invalid for target ${meta.targetChannelId}. Removing link.`);
                 db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(meta.targetChannelId);
-            } 
-            else if (error.code === 50006 && payload.sticker_ids) {
-                 console.log(`[QUEUE-RETRY][${meta.executionId}] Sticker failed. Retrying as text.`);
+			} else if (error.code === 50006 && payload.sticker_ids) {
+                 console.log(`[QUEUE-RETRY][${meta.executionId}] Sticker relay failed. Retrying with link fallback.`);
+                 
+                 // Remove the thing that caused the error
                  delete payload.sticker_ids;
-                 payload.content = (payload.content || "") + "\n*(Sticker was not compatible)*";
+                 
+                 // [THE FIX] improved fallback text
+                 let fallbackText = "";
+                 
+                 if (meta.stickerData) {
+                     if (meta.stickerData.url) {
+                         // Option 1: Clickable link (often renders a preview image!)
+                         fallbackText = `\n[Sticker: ${meta.stickerData.name}](${meta.stickerData.url})`;
+                     } else {
+                         // Option 2: Just the name if URL is somehow missing
+                         fallbackText = `\n*(sent sticker: ${meta.stickerData.name})*`;
+                     }
+                 } else {
+                     fallbackText = `\n*(sent a sticker)*`;
+                 }
+
+                 // Append to content
+                 payload.content = (payload.content || "") + fallbackText;
+                 
+                 // Content length safety check
                  if (payload.content.length > 2000) {
                      payload.content = payload.content.substring(0, 1997) + "...";
                  }
-                 this.queue.unshift(item);
-            }
-            if (error.code === 50006) {
+                 
+                 this.queue.unshift(item); // Retry immediately
+            } else if (error.code === 50006) {
                 // [THE FIX] Log specific details about the empty payload
                 console.error(`[QUEUE-FAIL][${meta.executionId}] Empty Message Error (50006). Debugging Payload:`);
                 console.error(`- Content Length: ${payload.content ? payload.content.length : 0}`);
@@ -111,8 +130,7 @@ class RelayQueue {
                      payload.content = "*[Error: Content was empty (likely a large file that was removed)]*";
                      this.queue.unshift(item);
                 }
-            }
-            else {
+            } else {
                 console.error(`[QUEUE-FAIL][${meta.executionId}] Failed to send to ${meta.targetChannelId}: ${error.message}`);
                 if ((error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') && attempt < 3) {
                     console.log(`[QUEUE-RETRY][${meta.executionId}] Network error. Attempt ${attempt + 1}/3.`);

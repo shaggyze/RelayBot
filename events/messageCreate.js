@@ -302,7 +302,7 @@ module.exports = {
                         repliedToId: message.reference ? message.reference.messageId : null,
                         targetChannelId: target.channel_id,
                         executionId: executionId,
-                        stickerData: stickerData 
+                        stickerData: stickerData
                     };
 
                     relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta);
