@@ -384,7 +384,6 @@ module.exports = {
                     .setTimestamp();
                 
                 await interaction.editReply({ embeds: [statsEmbed] });
-            }
 
             // --- [NEW COMMAND] Force Link ---
             } else if (subcommand === 'link_channel') {
