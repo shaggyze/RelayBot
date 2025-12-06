@@ -23,6 +23,13 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('rename_group').setDescription('[DANGER] Forcibly renames a global group.').addStringOption(option => option.setName('current_name').setDescription('The current name of the group you want to rename.').setRequired(true).setAutocomplete(true)).addStringOption(option => option.setName('new_name').setDescription('The new, unique name for the group.').setRequired(true)).addStringOption(option => option.setName('reason').setDescription('An optional reason for the name change to send to server owners.')))
         .addSubcommand(subcommand => subcommand.setName('check_subscription').setDescription('Checks the subscription status for the server that owns a specific group.').addStringOption(option => option.setName('group_name').setDescription('The name of the group to check.').setRequired(true).setAutocomplete(true)))
         .addSubcommand(subcommand => subcommand.setName('stats').setDescription('View stats for ANY group by name.').addStringOption(option => option.setName('group_name').setDescription('The name of the group to check.').setRequired(true).setAutocomplete(true)))
+        .addSubcommand(subcommand => 
+            subcommand.setName('link_channel')
+                .setDescription('[ADMIN] Force link a channel by ID.')
+                .addStringOption(option => option.setName('group_name').setDescription('Group Name').setRequired(true).setAutocomplete(true))
+                .addStringOption(option => option.setName('server_id').setDescription('Target Server ID').setRequired(true))
+                .addStringOption(option => option.setName('channel_id').setDescription('Target Channel ID').setRequired(true))
+                .addStringOption(option => option.setName('direction').setDescription('Direction').setRequired(false).addChoices({ name: 'Both Ways', value: 'BOTH' }, { name: 'Send Only', value: 'SEND_ONLY' }, { name: 'Receive Only', value: 'RECEIVE_ONLY' })))
     ,
 
     async execute(interaction) {
@@ -379,6 +386,85 @@ module.exports = {
                 await interaction.editReply({ embeds: [statsEmbed] });
             }
 
+            // --- [NEW COMMAND] Force Link ---
+            } else if (subcommand === 'link_channel') {
+                await interaction.deferReply({ ephemeral: true });
+
+                const groupName = interaction.options.getString('group_name');
+                const targetGuildId = interaction.options.getString('server_id');
+                const targetChannelId = interaction.options.getString('channel_id');
+                const direction = interaction.options.getString('direction') ?? 'BOTH';
+
+                // 1. Validate Group
+                const group = db.prepare('SELECT group_id FROM relay_groups WHERE group_name = ?').get(groupName);
+                if (!group) return interaction.editReply({ content: `❌ Group "**${groupName}**" not found.` });
+
+                // 2. Validate Target Guild & Channel Access
+                const targetGuild = await interaction.client.guilds.fetch(targetGuildId).catch(() => null);
+                if (!targetGuild) return interaction.editReply({ content: `❌ Bot is not in server ID \`${targetGuildId}\`.` });
+
+                const targetChannel = await targetGuild.channels.fetch(targetChannelId).catch(() => null);
+                if (!targetChannel) return interaction.editReply({ content: `❌ Channel ID \`${targetChannelId}\` not found in server.` });
+                
+                if (targetChannel.type !== ChannelType.GuildText && targetChannel.type !== ChannelType.GuildAnnouncement) {
+                    return interaction.editReply({ content: `❌ Channel is not a text or announcement channel.` });
+                }
+
+                // 3. Permission Check in TARGET Channel
+                const botMember = targetGuild.members.me;
+                const perms = botMember.permissionsIn(targetChannel);
+                if (!perms.has(PermissionFlagsBits.ManageWebhooks)) {
+                    return interaction.editReply({ content: `❌ Bot is missing **Manage Webhooks** permission in <#${targetChannelId}>.` });
+                }
+
+                // 4. Overwrite/Create Logic
+                const existingLink = db.prepare('SELECT group_id, webhook_url, allow_auto_role_creation FROM linked_channels WHERE channel_id = ?').get(targetChannelId);
+                
+                let webhookUrl;
+                let allowAutoRole = 0;
+                let statusMsg = '';
+
+                if (existingLink) {
+                    webhookUrl = existingLink.webhook_url;
+                    allowAutoRole = existingLink.allow_auto_role_creation;
+                    db.prepare('UPDATE linked_channels SET group_id = ?, direction = ? WHERE channel_id = ?').run(group.group_id, direction, targetChannelId);
+                    statusMsg = `⚠️ **Link Overwritten:** <#${targetChannelId}> (ID: ${targetChannelId}) updated to group "**${groupName}**".`;
+                } else {
+                    const webhook = await targetChannel.createWebhook({ name: 'RelayBot', reason: `Owner Force Link to ${groupName}` });
+                    webhookUrl = webhook.url;
+                    db.prepare('INSERT INTO linked_channels (channel_id, guild_id, group_id, webhook_url, direction, allow_auto_role_creation) VALUES (?, ?, ?, ?, ?, ?)').run(targetChannelId, targetGuildId, group.group_id, webhookUrl, direction, allowAutoRole);
+                    statusMsg = `✅ **Linked:** <#${targetChannelId}> (ID: ${targetChannelId}) linked to group "**${groupName}**".`;
+                }
+
+                // 5. Trigger Auto-Role Sync if enabled
+                let syncReport = '';
+                if (allowAutoRole) {
+                    if (perms.has(PermissionFlagsBits.ManageRoles)) {
+                         // Simple sync trigger (simplified version of relay.js logic)
+                         const masterRoles = db.prepare('SELECT DISTINCT role_name FROM role_mappings WHERE group_id = ?').all(group.group_id).map(r => r.role_name);
+                         if (masterRoles.length > 0) {
+                            await targetGuild.roles.fetch();
+                            let count = 0;
+                            for (const name of masterRoles) {
+                                const existMap = db.prepare('SELECT 1 FROM role_mappings WHERE group_id = ? AND guild_id = ? AND role_name = ?').get(group.group_id, targetGuildId, name);
+                                if (!existMap) {
+                                    const existRole = targetGuild.roles.cache.find(r => r.name === name);
+                                    if (existRole) {
+                                        db.prepare('INSERT INTO role_mappings (group_id, guild_id, role_name, role_id) VALUES (?, ?, ?, ?)').run(group.group_id, targetGuildId, name, existRole.id);
+                                        count++;
+                                    }
+                                }
+                            }
+                            syncReport = `\n🔄 Synced ${count} existing roles.`;
+                         }
+                    } else {
+                        syncReport = '\n⚠️ Auto-Role enabled but missing Manage Roles perm.';
+                    }
+                }
+
+                await interaction.editReply({ content: statusMsg + syncReport });
+            }
+
         } catch (error) {
            console.error(`Error in /owner ${subcommand}:`, error);
            if (interaction.deferred || interaction.replied) {
@@ -389,15 +475,15 @@ module.exports = {
         }
     },
 
+    // --- Autocomplete Handler ---
     async autocomplete(interaction) {
         const focusedOption = interaction.options.getFocused(true);
         const subcommand = interaction.options.getSubcommand();
         const choices = [];
 
-        if ((subcommand === 'delete_group' && focusedOption.name === 'name') ||
-            (subcommand === 'rename_group' && focusedOption.name === 'current_name') ||
-            (subcommand === 'stats' && focusedOption.name === 'group_name') ||
-            (subcommand === 'check_subscription' && focusedOption.name === 'group_name')) {
+        // Apply to delete_group, rename_group, check_subscription, stats, AND link_channel
+        if (['delete_group', 'rename_group', 'check_subscription', 'stats', 'link_channel'].includes(subcommand) && 
+            ['name', 'current_name', 'group_name'].includes(focusedOption.name)) {
             
             const searchTerm = focusedOption.value.length > 0 ? `%${focusedOption.value}%` : '%';
             const groups = db.prepare('SELECT group_name FROM relay_groups WHERE group_name LIKE ? LIMIT 25').all(searchTerm);

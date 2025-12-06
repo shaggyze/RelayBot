@@ -15,7 +15,7 @@ const groupsBeingWarned = new Set();
 
 const createVoteMessage = () => ({ content: "Please vote/subscribe to increase limits!", embeds: [] });
 const getRateLimitDayString = () => new Date().toISOString().slice(0, 10);
-const RESET_HOUR_UTC = 19;
+const RESET_HOUR_UTC = 20;
 
 module.exports = {
     name: Events.MessageCreate,
@@ -160,11 +160,16 @@ module.exports = {
                             }
                             
                             replyEmbed = new EmbedBuilder()
-                                .setColor('#B0B8C6')
+                                .setColor('#B0B8C6') 
                                 .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                 .setDescription(repliedContent);
                             
-                            replyPing = `<@${repliedMessage.author.id}> `;
+                            // [SMART PING] Check if user already mentioned the author manually
+                            const isAlreadyMentioned = message.mentions.users.has(repliedMessage.author.id);
+                            
+                            if (!isAlreadyMentioned) {
+                                replyPing = `<@${repliedMessage.author.id}> `;
+                            }
                         }
                     }
 
