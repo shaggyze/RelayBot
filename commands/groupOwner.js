@@ -76,12 +76,16 @@ module.exports = {
         try {
             if (subcommand === 'add_filter') {
                 const phrase = interaction.options.getString('phrase').toLowerCase().trim();
-                const threshold = interaction.options.getInteger('threshold');
-                const msg = interaction.options.getString('message');
+                const threshold = interaction.options.getString('threshold') || 0;
+                const msg = interaction.options.getString('message') || 'Bad word/phrase is not allowed.';
 
                 try {
                     db.prepare('INSERT INTO group_filters (group_id, phrase, threshold, warning_msg) VALUES (?, ?, ?, ?)').run(group.group_id, phrase, threshold, msg);
-                    await interaction.editReply({ content: `✅ Added filter: "**${phrase}**" (Block after ${threshold}, Msg: "${msg}")` });
+                    
+                    let status = `Block after ${threshold} strikes.`;
+                    if (threshold === 0) status = `**Censor Only** (No strikes/blocking).`;
+                    
+                    await interaction.editReply({ content: `✅ Added filter: "**${phrase}**" (${status})\nMsg: "${msg}"` });
                 } catch (e) {
                     if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
                         await interaction.editReply({ content: `⚠️ "**${phrase}**" is already in the filter list.` });

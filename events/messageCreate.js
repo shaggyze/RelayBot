@@ -88,8 +88,6 @@ module.exports = {
 
             // --- NEW FILTER SYSTEM ---
             let filterContent = message.content;
-            let shouldBlock = false;
-            let trippedFilter = null; // Store the filter definition that was tripped
 
             if (filterContent) {
                 const filters = db.prepare('SELECT * FROM group_filters WHERE group_id = ?').all(sourceChannelInfo.group_id);
@@ -97,6 +95,8 @@ module.exports = {
                 for (const f of filters) {
                     const regex = new RegExp(`\\b${escapeRegex(f.phrase)}\\b`, 'gi');
                     if (regex.test(filterContent)) {
+                        let shouldBlock = false;
+                        let trippedFilter = null;
                         filterContent = filterContent.replace(regex, '***');
                         if (!isBotOwner && !isGroupOwner) trippedFilter = f;
 
@@ -122,26 +122,24 @@ module.exports = {
                                 // Strike out
                                 shouldBlock = true;
                                 // Notify User they are blocked
-                                await sendWarning(message, userStats.user_id, `🚫 **You have been blocked from the relay group.**\nReason: Repeated use of prohibited phrase: "||${trippedFilter.phrase}||"`);
+                                await sendWarning(message, message.author.id, `🚫 **You have been blocked from the relay group.**\nReason: Repeated use of prohibited phrase: "||${trippedFilter.phrase}||"`);
                             } else {
                                 // Warn User
                                 const remaining = trippedFilter.threshold - userStats.warning_count;
-                                await sendWarning(message, userStats.user_id, `⚠️ **Warning:** ${trippedFilter.warning_msg}\nPhrase: "||${trippedFilter.phrase}||"\nStrikes: ${userStats.warning_count}/${trippedFilter.threshold}. (${remaining} left).`);
+                                await sendWarning(message, message.author.id, `⚠️ **Warning:** ${trippedFilter.warning_msg}\nPhrase: "||${trippedFilter.phrase}||"\nStrikes: ${userStats.warning_count}/${trippedFilter.threshold}. (${remaining} left).`);
                             }
 
                             if (shouldBlock) {
-                                // Apply Block
                                 try {
                                     db.prepare('INSERT INTO group_blacklist (group_id, blocked_id, type) VALUES (?, ?, ?)').run(sourceChannelInfo.group_id, message.author.id, 'USER');
                                     
-                                    // Notify Group Owner
-                                    const report = `**User Blocked:** ${message.author.tag} (\`${userStats.user_id}\`)\n` +
+                                    const report = `**User Blocked:** ${message.author.tag} (\`${message.author.id}\`)\n` +
                                                    `**Trigger Phrase:** ${trippedFilter.phrase}\n` +
                                                    `**Strikes:** ${userStats.warning_count}\n` +
                                                    `**Original Message:**\n> ${message.content}\n` +
                                                    `**Link:** ${message.url}`;
                                     await notifyGroupOwner(message.client, groupInfo, report);
-                                    console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${userStats.user_id}) in server ${message.guild.name} (ID: ${userStats.guild_id}) for group ${sourceChannelInfo.group_id}.\n\n${report}`);
+                                    console.warn(`[FILTER-BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.\n\n${report}`);
                                 } catch (e) {} // Ignore if already blocked
                                 
                                 return; // DO NOT RELAY
