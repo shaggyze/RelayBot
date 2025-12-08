@@ -11,7 +11,7 @@ module.exports = {
         .setDefaultMemberPermissions(0) // Logic handles permissions internally
         .addSubcommand(subcommand => subcommand.setName('add_filter').setDescription('Add a phrase to the filter.')
             .addStringOption(option => option.setName('phrase').setDescription('The word/phrase to censor.').setRequired(true))
-            .addIntegerOption(option => option.setName('threshold').setDescription('Strikes before block (0=Off,1=Instant).').setRequired(true).setMinValue(0).setMaxValue(100))
+            .addIntegerOption(option => option.setName('threshold').setDescription('Strikes before block (0=Off, 1=Instant).').setRequired(false).setMinValue(0).setMaxValue(100))
             .addStringOption(option => option.setName('message').setDescription('Warning message to send to user.').setRequired(false)))
         .addSubcommand(subcommand => subcommand.setName('remove_filter').setDescription('Remove a phrase from the filter.')
             .addStringOption(option => option.setName('phrase').setDescription('The phrase to remove.').setRequired(true).setAutocomplete(true)))
