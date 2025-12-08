@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const relayQueue = require('../utils/relayQueue.js');
 const { isGroupSupported } = require('../utils/supporterManager.js');
 
+const BOT_OWNER_ID = '182938628643749888';
+
 const webhookCache = new Collection();
 const MAX_PAYLOAD_SIZE = 6.0 * 1024 * 1024; 
 const MAX_USERNAME_LENGTH = 80;
@@ -16,6 +18,33 @@ const groupsBeingWarned = new Set();
 const createVoteMessage = () => ({ content: "Please vote/subscribe to increase limits!", embeds: [] });
 const getRateLimitDayString = () => new Date().toISOString().slice(0, 10);
 const RESET_HOUR_UTC = 20;
+
+function escapeRegex(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+async function sendWarning(message, userId, text) {
+    try {
+        // Try DM first
+        const user = await message.client.users.fetch(userId);
+        await user.send(`⚠️ **RelayBot Warning**\nServer: ${message.guild.name}\n${text}`);
+    } catch (dmError) {
+        // Fallback to Channel with Ping
+        try {
+            const reply = await message.channel.send(`<@${userId}> ${text}`);
+            // Optional: delete warning after a while
+            setTimeout(() => reply.delete().catch(() => {}), 15000);
+        } catch (chError) { /* Cannot warn */ }
+    }
+}
+
+async function notifyGroupOwner(client, groupInfo, report) {
+    if (!groupInfo.owner_user_id) return; // Can't notify if unknown
+    try {
+        const owner = await client.users.fetch(groupInfo.owner_user_id);
+        await owner.send(`🛡️ **RelayBot Auto-Mod Report**\n**Group:** ${groupInfo.group_name}\n\n${report}`);
+    } catch (e) {
+        console.error(`Failed to DM Group Owner ${groupInfo.owner_user_id}: ${e.message}`);
+    }
+}
 
 module.exports = {
     name: Events.MessageCreate,
@@ -43,7 +72,7 @@ module.exports = {
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
 				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
-				return; 
+				return;
 			}
 
             const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
@@ -53,8 +82,76 @@ module.exports = {
                 return;
             }
             
+            // --- IMMUNITY CHECK ---
+            const isBotOwner = message.author.id === BOT_OWNER_ID
+            const isGroupOwner = message.author.id === groupInfo.owner_user_id;
+
+            // --- NEW FILTER SYSTEM ---
+            let filterContent = message.content;
+            let shouldBlock = false;
+            let trippedFilter = null; // Store the filter definition that was tripped
+
+            if (filterContent) {
+                const filters = db.prepare('SELECT * FROM group_filters WHERE group_id = ?').all(sourceChannelInfo.group_id);
+                
+                for (const f of filters) {
+                    const regex = new RegExp(`\\b${escapeRegex(f.phrase)}\\b`, 'gi');
+                    if (regex.test(filterContent)) {
+                        filterContent = filterContent.replace(regex, '***');
+                        if (!isBotOwner && !isGroupOwner) trippedFilter = f;
+
+                        if (trippedFilter) {
+                            // Update Warnings
+                            db.prepare(`
+                                INSERT INTO user_warnings (group_id, user_id, filter_id, warning_count, last_violation_at) 
+                                VALUES (?, ?, ?, 1, ?)
+                                ON CONFLICT(group_id, user_id, filter_id) 
+                                DO UPDATE SET warning_count = warning_count + 1, last_violation_at = excluded.last_violation_at
+                            `).run(sourceChannelInfo.group_id, message.author.id, trippedFilter.filter_id, Date.now());
+
+                            const userStats = db.prepare('SELECT warning_count FROM user_warnings WHERE group_id = ? AND user_id = ? AND filter_id = ?').get(sourceChannelInfo.group_id, message.author.id, trippedFilter.filter_id);
+                            
+                            // Logic based on Individual Filter Threshold
+                            if (trippedFilter.threshold === 0) {
+                                break;
+                            } else if (trippedFilter.threshold === 1) {
+                                // Instant Silent Block
+                                shouldBlock = true;
+                                // Do NOT warn user.
+                            } else if (userStats.warning_count >= trippedFilter.threshold) {
+                                // Strike out
+                                shouldBlock = true;
+                                // Notify User they are blocked
+                                await sendWarning(message, userStats.user_id, `🚫 **You have been blocked from the relay group.**\nReason: Repeated use of prohibited phrase: "||${trippedFilter.phrase}||"`);
+                            } else {
+                                // Warn User
+                                const remaining = trippedFilter.threshold - userStats.warning_count;
+                                await sendWarning(message, userStats.user_id, `⚠️ **Warning:** ${trippedFilter.warning_msg}\nPhrase: "||${trippedFilter.phrase}||"\nStrikes: ${userStats.warning_count}/${trippedFilter.threshold}. (${remaining} left).`);
+                            }
+
+                            if (shouldBlock) {
+                                // Apply Block
+                                try {
+                                    db.prepare('INSERT INTO group_blacklist (group_id, blocked_id, type) VALUES (?, ?, ?)').run(sourceChannelInfo.group_id, message.author.id, 'USER');
+                                    
+                                    // Notify Group Owner
+                                    const report = `**User Blocked:** ${message.author.tag} (\`${userStats.user_id}\`)\n` +
+                                                   `**Trigger Phrase:** ${trippedFilter.phrase}\n` +
+                                                   `**Strikes:** ${userStats.warning_count}\n` +
+                                                   `**Original Message:**\n> ${message.content}\n` +
+                                                   `**Link:** ${message.url}`;
+                                    await notifyGroupOwner(message.client, groupInfo, report);
+                                    console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${userStats.user_id}) in server ${message.guild.name} (ID: ${userStats.guild_id}) for group ${sourceChannelInfo.group_id}.\n\n${report}`);
+                                } catch (e) {} // Ignore if already blocked
+                                
+                                return; // DO NOT RELAY
+                            }
+                        }
+                    }
+                }
+            }
             const rateLimitDayString = getRateLimitDayString();
-            const messageLength = (message.content || '').length;
+            const messageLength = (filterContent || '').length;
             
             if (messageLength > 0) {
                 db.prepare(`INSERT INTO group_stats (group_id, day, character_count) VALUES (?, ?, ?) ON CONFLICT(group_id, day) DO UPDATE SET character_count = character_count + excluded.character_count`).run(sourceChannelInfo.group_id, rateLimitDayString, messageLength);
@@ -110,7 +207,7 @@ module.exports = {
             for (const target of targetChannels) {
                 let replyEmbed = null;
                 let replyPing = ''; 
-                let finalContent = message.content;
+                let finalContent = filterContent;
                 let hasUnmappedRoles = false;
                 let safeFiles = [];
                 let largeFiles = [];

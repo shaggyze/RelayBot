@@ -42,14 +42,8 @@ module.exports = {
         try {
             if (subcommand === 'list_groups') {
                 await interaction.deferReply({ ephemeral: true });
-                const allGroups = db.prepare(`SELECT rg.group_id, rg.group_name, rg.owner_guild_id, SUM(gs.character_count) as total_chars, COUNT(DISTINCT gs.day) as active_days, MAX(gs.day) as last_active_day FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id ORDER BY rg.group_name ASC`).all();
+                const allGroups = db.prepare(`SELECT rg.group_id, rg.group_name, rg.owner_guild_id, rg.owner_user_id, SUM(gs.character_count) as total_chars, COUNT(DISTINCT gs.day) as active_days, MAX(gs.day) as last_active_day FROM relay_groups rg LEFT JOIN group_stats gs ON rg.group_id = gs.group_id GROUP BY rg.group_id ORDER BY rg.group_name ASC`).all();
                 if (allGroups.length === 0) return interaction.editReply({ content: 'There are currently no relay groups in the database.' });
-                
-                const supporterGuilds = new Set();
-                // Populate supporterGuilds using the new manager functions + subscriptions
-                // However, for list_groups we probably just want to visualize which have supporters
-                // Reusing the logic from the optimized check might be complex here since it iterates.
-                // Simplest is to use isGroupSupported for each group.
                 
                 const today = getRateLimitDayString();
                 const todaysStatsRaw = db.prepare('SELECT group_id, character_count, warning_sent_at FROM group_stats WHERE day = ?').all(today);
@@ -65,6 +59,10 @@ module.exports = {
                     const ownerGuild = interaction.client.guilds.cache.get(group.owner_guild_id);
                     let ownerUserDetails = '';
                     if (ownerGuild) {
+                        // Cache/Update owner_user_id
+                        if (group.owner_user_id !== ownerGuild.ownerId) {
+                            db.prepare('UPDATE relay_groups SET owner_user_id = ? WHERE group_id = ?').run(ownerGuild.ownerId, group.group_id);
+                        }
                         try {
                             const ownerUser = await ownerGuild.fetchOwner(); 
                             ownerUserDetails = ownerUser && ownerUser.user ? ` (Owner: ${ownerUser.user.tag} ID: \`${ownerUser.user.id}\`)` : ` (Owner: Unknown User ID: \`${ownerGuild.ownerId}\`)`;
@@ -75,10 +73,9 @@ module.exports = {
                     const isPaused = todaysStats.paused;
                     const totalChars = group.total_chars || 0;
                     const lastActiveDate = group.last_active_day ? new Date(group.last_active_day) : null;
-                    
                     let statusEmoji = isPaused ? '🟡' : (totalChars === 0 ? '🔴' : (lastActiveDate && lastActiveDate < sevenDaysAgo ? '🟠' : '🟢'));
                     
-                    // [THE FIX] Use optimized check for the star
+                    // Optimized Check
                     const star = isGroupSupported(group.group_id) ? '⭐' : '';
                     
                     const todaysChars = todaysStats.count;
@@ -90,7 +87,7 @@ module.exports = {
                     currentDescription += fullLine;
                 }
                 descriptions.push(currentDescription);
-                const embeds = descriptions.map((desc, index) => new EmbedBuilder().setTitle(`Global Relay Groups (Page ${index + 1}/${descriptions.length})`).setColor('#FFD700').setDescription(desc).setTimestamp().setFooter({ text: `Total Groups: ${allGroups.length} | 🟢 Active / 🟡 Paused / 🟠 Stale / 🔴 Inactive | ⭐ Supporter` }));
+                const embeds = descriptions.map((desc, index) => new EmbedBuilder().setTitle(`Global Relay Groups (Page ${index + 1}/${descriptions.length})`).setColor('#FFD700').setDescription(desc));
                 await interaction.editReply({ embeds: [embeds[0]] });
                 for (let i = 1; i < embeds.length; i++) await interaction.followUp({ embeds: [embeds[i]], ephemeral: true });
 

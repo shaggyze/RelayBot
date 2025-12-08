@@ -16,13 +16,12 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('kick_server').setDescription('Forcibly removes a server from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own').setRequired(true)).addStringOption(option => option.setName('server_id').setDescription('The ID of the server to kick').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('link_channel').setDescription('Links this channel to a global relay group.').addStringOption(option => option.setName('group_name').setDescription('The name of the global group to link to').setRequired(true)).addStringOption(option => option.setName('direction').setDescription('Set the message direction for this channel (default: Both Ways).').setRequired(false).addChoices({ name: 'Both Ways (Send & Receive)', value: 'BOTH' }, { name: 'One Way (Send messages FROM this channel only)', value: 'SEND_ONLY' }, { name: 'Reverse (Receive messages IN this channel only)', value: 'RECEIVE_ONLY' })))
         .addSubcommand(subcommand => subcommand.setName('unlink_channel').setDescription('Unlinks the current channel from its relay group.'))
-        // --- MODIFY THIS SUBCOMMAND ---
         .addSubcommand(subcommand => subcommand.setName('list_servers')
             .setDescription('Lists all servers and their linked channels for a global group.')
             .addStringOption(option => 
                 option.setName('group_name')
-                    .setDescription('The name of the group to list servers for.') // Updated description
-                    .setRequired(true) // Still required for this command's default public use
+                    .setDescription('The name of the group to list servers for.')
+                    .setRequired(true)
                     .setAutocomplete(true)))
 		.addSubcommand(subcommand => 
             subcommand.setName('map_role')
@@ -42,11 +41,10 @@ module.exports = {
         .addSubcommand(subcommand => subcommand.setName('toggle_forward_delete').setDescription('Toggle if deleting an original message also deletes its copies (ON by default).'))
         .addSubcommand(subcommand => subcommand.setName('toggle_reverse_delete').setDescription('Toggle if deleting a relayed copy also deletes the original message (OFF by default).'))
         .addSubcommand(subcommand => subcommand.setName('set_brand').setDescription('Sets a custom server brand/name for messages from this channel.').addStringOption(option => option.setName('name').setDescription('The custom name to display (e.g., "UGW"). Leave blank to remove.').setMaxLength(40)))
-        .addSubcommand(subcommand => subcommand.setName('block').setDescription('Blocks a user or server from being relayed in a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own.').setRequired(true)).addStringOption(option => option.setName('target_id').setDescription('The User ID or Server ID to block.').setRequired(true)))
-        .addSubcommand(subcommand => subcommand.setName('unblock').setDescription('Unblocks a user or server from a group you own.').addStringOption(option => option.setName('group_name').setDescription('The name of the group you own.').setRequired(true)).addStringOption(option => option.setName('target_id').setDescription('The User ID or Server ID to unblock.').setRequired(true)))
         .addSubcommand(subcommand => subcommand.setName('toggle_auto_role').setDescription('Toggle auto-role creation/linking when linking this channel to a group.'))
 		.addSubcommand(subcommand => subcommand.setName('toggle_webhook_relay').setDescription('Toggles whether this channel relays messages sent by Webhooks or other bots (OFF by default).'))
 	,
+
     async execute(interaction) {
         if (!interaction.inGuild()) {
             return await interaction.reply({ content: 'This command can only be used inside a server.', ephemeral: true });
@@ -63,8 +61,10 @@ module.exports = {
 
             } else if (subcommand === 'create_group') {
                 const groupName = interaction.options.getString('name');
+                const serverOwnerId = interaction.guild.ownerId;
+
                 try {
-                    db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id) VALUES (?, ?)').run(groupName, guildId);
+                    db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id, owner_user_id) VALUES (?, ?, ?)').run(groupName, guildId, serverOwnerId);
                     await interaction.deferReply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.`, ephemeral: true });
                 } catch (error) {
                     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -94,7 +94,7 @@ module.exports = {
                 } else {
                     await interaction.reply({ content: `That server was not found in the "**${groupName}**" group. No action was taken.`, ephemeral: true });
                 }
-				// This block REPLACES the entire `else if (subcommand === 'link_channel')` section in commands/relay.js
+
 			} else if (subcommand === 'link_channel') {
 				// 1. Initial Deferral
 				await interaction.deferReply({ ephemeral: true });
@@ -430,88 +430,6 @@ module.exports = {
                     await interaction.reply({ content: `✅ **Success!** Messages from this channel will now be branded with "**${newBrand}**".`, ephemeral: true });
                 } else {
                     await interaction.reply({ content: `✅ **Success!** The custom brand for this channel has been removed.`, ephemeral: true });
-                }
-
-            } else if (subcommand === 'block' || subcommand === 'unblock') {
-                await interaction.deferReply({ ephemeral: true });
-                const groupName = interaction.options.getString('group_name');
-                const targetId = interaction.options.getString('target_id');
-    
-                const group = db.prepare('SELECT group_id, owner_guild_id FROM relay_groups WHERE group_name = ?').get(groupName);
-                if (!group) return interaction.editReply({ content: `❌ **Error:** No group found with the name "${groupName}".` });
-                if (interaction.guild.id !== group.owner_guild_id) return interaction.editReply({ content: `❌ **Permission Denied:** You can only manage the blocklist from the server that owns this group.` });
-                
-                // Determine if the ID is a user or a guild
-                let type = null;
-                if (/^\d{17,19}$/.test(targetId)) {
-                    if (interaction.client.guilds.cache.has(targetId)) {
-                        type = 'GUILD';
-                    } else {
-                        type = 'USER'; // Default to user if not a cached guild
-                    }
-                } else {
-                    return interaction.editReply({ content: '❌ **Error:** The provided ID is not a valid User or Server ID.' });
-                }
-
-                // --- [NEW HIERARCHY PERMISSION CHECKS] ---
-                if (type === 'USER') {
-                    // Rule: Cannot target yourself.
-                    if (targetId === interaction.user.id) {
-                        return interaction.editReply({ content: `❌ You cannot ${subcommand} yourself.` });
-                    }
-
-                    // Fetch the target member to check their permissions.
-                    let targetMember;
-                    try {
-                        targetMember = await interaction.guild.members.fetch(targetId);
-                    } catch {
-                        // If the user isn't in the server, they can't be an admin or owner.
-                        // It's safe to proceed with the block/unblock action.
-                    }
-
-                    if (targetMember) {
-                        const executorIsBotOwner = interaction.user.id === BOT_OWNER_ID;
-                        const executorIsServerOwner = interaction.user.id === interaction.guild.ownerId;
-                        
-                        const targetIsBotOwner = targetId === BOT_OWNER_ID; // <-- New Check
-                        const targetIsServerOwner = targetId === interaction.guild.ownerId;
-                        const targetIsAdmin = targetMember.permissions.has(PermissionFlagsBits.Administrator);
-
-                        // [NEW RULE] The Bot Owner cannot be blocked by anyone.
-                        if (targetIsBotOwner) {
-                            return interaction.editReply({ content: `❌ The bot owner cannot be blocked.` });
-                        }
-
-                        // Rule: The Server Owner cannot be blocked by anyone.
-                        if (targetIsServerOwner) {
-                            return interaction.editReply({ content: `❌ The server owner cannot be blocked.` });
-                        }
-
-                        // Rule: An admin (who is NOT the server owner) cannot block another admin.
-                        // This check is bypassed if the person running the command is the bot owner.
-                        if (targetIsAdmin && !executorIsServerOwner && !executorIsBotOwner) {
-                            return interaction.editReply({ content: `❌ As an administrator, you cannot block another administrator. Only the server owner or bot owner can perform this action.` });
-                        }
-                    }
-                }
-                // --- End of new permission checks ---
-    
-                if (subcommand === 'block') {
-                    try {
-                        db.prepare('INSERT INTO group_blacklist (group_id, blocked_id, type) VALUES (?, ?, ?)').run(group.group_id, targetId, type);
-                        await interaction.editReply({ content: `✅ **Blocked:** The ${type} with ID \`${targetId}\` will no longer be relayed in the "**${groupName}**" group.` });
-                    } catch (error) {
-                        if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                            await interaction.editReply({ content: `⚠️ That ID is already blocked.` });
-                        } else { throw error; }
-                    }
-                } else { // unblock
-                    const result = db.prepare('DELETE FROM group_blacklist WHERE group_id = ? AND blocked_id = ?').run(group.group_id, targetId);
-                    if (result.changes > 0) {
-                        await interaction.editReply({ content: `✅ **Unblocked:** The ${type} with ID \`${targetId}\` can now be relayed again in the "**${groupName}**" group.` });
-                    } else {
-                        await interaction.editReply({ content: `⚠️ That ID was not found in the blocklist.` });
-                    }
                 }
 
 			} else if (subcommand === 'toggle_auto_role') {
