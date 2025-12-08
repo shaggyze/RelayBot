@@ -60,16 +60,24 @@ module.exports = {
                 await interaction.deferReply({ embeds: [helpEmbed], ephemeral: true });
 
             } else if (subcommand === 'create_group') {
+                // 1. Use deferReply to prevent timeouts during database writes
+                await interaction.deferReply({ ephemeral: true });
+                
                 const groupName = interaction.options.getString('name');
-                const serverOwnerId = interaction.guild.ownerId;
+                const serverOwnerId = interaction.guild.ownerId; // Get the Discord Server Owner's ID
 
                 try {
+                    // 2. Insert the group WITH the owner_user_id
                     db.prepare('INSERT INTO relay_groups (group_name, owner_guild_id, owner_user_id) VALUES (?, ?, ?)').run(groupName, guildId, serverOwnerId);
-                    await interaction.deferReply({ content: `✅ **Global** relay group "**${groupName}**" has been created! Other servers can now link their channels to this group by name.`, ephemeral: true });
+                    
+                    await interaction.editReply({ content: `✅ **Global** relay group "**${groupName}**" has been created!\n\nOther servers can now link their channels to this group by name.` });
+                
                 } catch (error) {
                     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                        await interaction.deferReply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists. You don't need to create it again. You can link your channel directly to the existing group with \`/relay link_channel\`.`, ephemeral: true });
-                    } else { throw error; }
+                        await interaction.editReply({ content: `❌ **Error:** A global group named "**${groupName}**" already exists. Please choose a different unique name or You can link your channel directly to the existing group with \`/relay link_channel\`.` });
+                    } else { 
+                        throw error; 
+                    }
                 }
 
             } else if (subcommand === 'delete_group') {
