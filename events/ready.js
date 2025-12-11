@@ -170,8 +170,8 @@ async function runDailyVoteReminder(client) {
                 }
             }
         }
+        console.log(`[Tasks] Daily vote reminder task finished.  ${channelsToSendTo.length}/${allLinkedGroups.length}`);
     }
-    console.log(`[Tasks] Daily vote reminder task finished.  ${channelsToSendTo.length}/${allLinkedGroups.length}`);
 }
 
 function scheduleNextNoonTask(client) {
