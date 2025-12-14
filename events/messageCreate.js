@@ -371,9 +371,69 @@ module.exports = {
                         finalPayloadContent = finalPayloadContent.substring(0, DISCORD_MESSAGE_LIMIT - 50) + "...(truncated)";
                     }
 
-                    payloadEmbeds = [];
                     if (replyEmbed) payloadEmbeds.push(replyEmbed);
-                    payloadEmbeds.push(...message.embeds);
+
+                    if (message.embeds.length > 0) {
+                        for (const originalEmbed of message.embeds) {
+                            // Skip the "Replying to..." embed if we are creating our own
+                            // (Though usually message.embeds refers to the original message's content)
+                            
+                            // Create a new Builder to sanitize the data
+                            const cleanEmbed = new EmbedBuilder();
+
+                            // Copy standard fields
+                            if (originalEmbed.title) cleanEmbed.setTitle(originalEmbed.title);
+                            if (originalEmbed.description) cleanEmbed.setDescription(originalEmbed.description);
+                            if (originalEmbed.url) cleanEmbed.setURL(originalEmbed.url);
+                            if (originalEmbed.color) cleanEmbed.setColor(originalEmbed.color);
+                            if (originalEmbed.timestamp) cleanEmbed.setTimestamp(new Date(originalEmbed.timestamp));
+                            
+                            // Copy Author
+                            if (originalEmbed.author) {
+                                cleanEmbed.setAuthor({
+                                    name: originalEmbed.author.name,
+                                    url: originalEmbed.author.url,
+                                    iconURL: originalEmbed.author.iconURL
+                                });
+                            }
+
+                            // Copy Footer
+                            if (originalEmbed.footer) {
+                                cleanEmbed.setFooter({
+                                    text: originalEmbed.footer.text,
+                                    iconURL: originalEmbed.footer.iconURL
+                                });
+                            }
+
+                            // Copy Fields
+                            if (originalEmbed.fields && originalEmbed.fields.length > 0) {
+                                cleanEmbed.addFields(originalEmbed.fields);
+                            }
+
+                            // [CRITICAL FIX] Handle Images and Thumbnails
+                            // If the original had an image (even if it was an auto-embed), set it explicitly.
+                            // This forces the "Big Image" view.
+                            if (originalEmbed.image) {
+                                cleanEmbed.setImage(originalEmbed.image.url);
+                            } else if (originalEmbed.thumbnail && originalEmbed.type === 'image') {
+                                // Sometimes auto-images are stored in thumbnail field for 'image' types
+                                cleanEmbed.setImage(originalEmbed.thumbnail.url);
+                            } else if (originalEmbed.thumbnail) {
+                                // Otherwise, keep it as a standard thumbnail (small top-right image)
+                                cleanEmbed.setThumbnail(originalEmbed.thumbnail.url);
+                            }
+
+                            // Only add if it has content (Discord rejects empty embeds)
+                            if (cleanEmbed.data.title || cleanEmbed.data.description || cleanEmbed.data.image || cleanEmbed.data.author) {
+                                payloadEmbeds.push(cleanEmbed);
+                            } else if (originalEmbed.url && originalEmbed.type === 'image') {
+                                // Edge case: Just a raw image link embed without other data. 
+                                // Force it into an image embed.
+                                cleanEmbed.setImage(originalEmbed.url);
+                                payloadEmbeds.push(cleanEmbed);
+                            }
+                        }
+                    }
 
                     const sticker = message.stickers.first();
                     const stickerId = sticker?.id;
