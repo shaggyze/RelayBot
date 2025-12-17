@@ -81,7 +81,7 @@ class RelayQueue {
                 console.warn(`[QUEUE-429][${meta.executionId}] Rate Limit hit for ${meta.targetChannelId}. Backing off.`);
                 this.queue.unshift(item); 
                 await new Promise(resolve => setTimeout(resolve, 5000));
-            else if (error.code === 10015) {
+            } else if (error.code === 10015) {
                 // [THE FIX] Use the Manager
                 const newClient = await webhookManager.handleInvalidWebhook(client, meta.targetChannelId, 'RelayQueue');
                 if (newClient) {
