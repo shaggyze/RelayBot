@@ -135,15 +135,16 @@ async function runDailyVoteReminder(client) {
                 await webhookClient.send(votePayload);
             } catch (error) {
                 // Handle Invalid Webhook (10015) with Repair -> Notify -> Delete
-            if (error.code === 10015) {
-                // [THE FIX] Use the Manager
-                const newClient = await webhookManager.handleInvalidWebhook(client, channelInfo.channel_id, 'Vote Reminder');
-                if (newClient) {
-                    // Retry send
-                    await newClient.send(votePayload).catch(() => {});
-                } else if (error.code === 10003 || error.code === 50001) {
-                    console.warn(`[Tasks] Channel inaccessible (${error.code}). Removing link for ${channelInfo.channel_id}.`);
-                    db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
+                if (error.code === 10015) {
+                    // [THE FIX] Use the Manager
+                    const newClient = await webhookManager.handleInvalidWebhook(client, channelInfo.channel_id, 'Vote Reminder');
+                    if (newClient) {
+                        // Retry send
+                        await newClient.send(votePayload).catch(() => {});
+                    } else if (error.code === 10003 || error.code === 50001) {
+                        console.warn(`[Tasks] Channel inaccessible (${error.code}). Removing link for ${channelInfo.channel_id}.`);
+                        db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
+                    }
                 }
             }
         }
