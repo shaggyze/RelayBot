@@ -1,5 +1,6 @@
 // utils/relayQueue.js
 const { WebhookClient } = require('discord.js');
+const webhookManager = require('./webhookManager.js');
 
 class RelayQueue {
     constructor() {
@@ -17,14 +18,12 @@ class RelayQueue {
      * @param {object} db - Database reference
      * @param {object} meta - Metadata (original ID, channel IDs for DB insert)
      */
-    add(webhookUrl, payload, db, meta) {
-        this.queue.push({ webhookUrl, payload, db, meta, attempt: 1 });
-
-        // Optional: Log when it enters the queue
-        // console.log(`[QUEUE-ADD][${meta.executionId}] Queued message for target ${meta.targetChannelId}`);
-
+    add(webhookUrl, payload, db, meta, client) {
+        this.queue.push({ webhookUrl, payload, db, meta, client, attempt: 1 });
         this.process();
     }
+        // Optional: Log when it enters the queue
+        // console.log(`[QUEUE-ADD][${meta.executionId}] Queued message for target ${meta.targetChannelId}`);
 
     async process() {
         if (this.processing) return;
@@ -49,7 +48,7 @@ class RelayQueue {
     }
 
     async sendItem(item) {
-        const { webhookUrl, payload, db, meta, attempt } = item;
+        const { webhookUrl, payload, db, meta, attempt, client } = item;
 		console.log(`[QUEUE-SEND][${meta.executionId}] Attempting to relay message ${meta.originalMsgId} to target channel #${meta.targetChannelId}`);
         try {
             const webhookClient = new WebhookClient({ url: webhookUrl });
@@ -82,9 +81,16 @@ class RelayQueue {
                 console.warn(`[QUEUE-429][${meta.executionId}] Rate Limit hit for ${meta.targetChannelId}. Backing off.`);
                 this.queue.unshift(item); 
                 await new Promise(resolve => setTimeout(resolve, 5000));
-            } else if (error.code === 10015) {
-                console.error(`[QUEUE-CLEANUP][${meta.executionId}] Webhook invalid for target ${meta.targetChannelId}. Removing link.`);
-                db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(meta.targetChannelId);
+            else if (error.code === 10015) {
+                // [THE FIX] Use the Manager
+                const newClient = await webhookManager.handleInvalidWebhook(client, meta.targetChannelId, 'RelayQueue');
+                if (newClient) {
+                    // Update item with new URL and retry immediately (put at front)
+                    item.webhookUrl = newClient.url;
+                    this.queue.unshift(item);
+                }
+                // If null, it was deleted/cleaned up automatically by the manager.
+            } 
 			} else if (error.code === 50006 && payload.sticker_ids) {
                  console.log(`[QUEUE-RETRY][${meta.executionId}] Sticker relay failed. Retrying with link fallback.`);
                  

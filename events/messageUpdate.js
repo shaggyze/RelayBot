@@ -1,6 +1,7 @@
 // events/messageUpdate.js
 const { Events, WebhookClient, EmbedBuilder } = require('discord.js');
 const db = require('../db/database.js');
+const webhookManager = require('../utils/webhookManager.js');
 
 const MAX_USERNAME_LENGTH = 80;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -188,11 +189,22 @@ async function rebuildAndEdit(client, originalMessageId) {
 
             } catch (loopError) {
 				console.error(`[EDIT-LOOP-ERROR] A failure occurred while processing an update for relayed message ${relayed.relayed_message_id}:`, loopError);
-                if (loopError.code === 10015) { // Unknown Webhook
-                    console.warn(`[EDIT] [AUTO-CLEANUP] Webhook for channel ${relayed.relayed_channel_id} is invalid. Removing from relay.`);
-                    db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(relayed.relayed_channel_id);
+                if (loopError.code === 10015) { 
+                    // [THE FIX] Use the Manager
+                    // We can attempt to repair and then retry the edit immediately
+                    const newClient = await webhookManager.handleInvalidWebhook(client, relayed.relayed_channel_id, 'Message Update');
+                    if (newClient) {
+                         try {
+                             await newClient.editMessage(relayed.relayed_message_id, payload);
+                             // console.log(`[EDIT] Success after repair.`);
+                         } catch (e) { /* ignore retry fail */ }
+                    }
                 } else if (loopError.code !== 10008) { // Ignore Unknown Message
                      console.error(`[EDIT-LOOP-ERROR] Failed update for ${relayed.relayed_message_id}:`, loopError.message);
+                } else {
+                    const errorCode = error.code || 'N/A';
+                    const errorMsg = error.message || 'Unknown error occurred';
+                    console.error(`[EDIT-LOOP-ERROR] FAILED to update relay for target #${targetChannelNameForError}. Code: ${errorCode} | Error: ${errorMsg}`);
                 }
             }
         }

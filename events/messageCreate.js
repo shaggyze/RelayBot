@@ -4,6 +4,8 @@ const db = require('../db/database.js');
 const crypto = require('crypto');
 const relayQueue = require('../utils/relayQueue.js');
 const { isGroupSupported } = require('../utils/supporterManager.js');
+const webhookManager = require('../utils/webhookManager.js');
+const Logger = require('../utils/logManager.js');
 
 const BOT_OWNER_ID = '182938628643749888';
 
@@ -42,7 +44,7 @@ async function notifyGroupOwner(client, groupInfo, report) {
         const owner = await client.users.fetch(groupInfo.owner_user_id);
         await owner.send(`🛡️ **RelayBot Auto-Mod Report**\n**Group:** ${groupInfo.group_name}\n\n${report}`);
     } catch (e) {
-        console.error(`Failed to DM Group Owner ${groupInfo.owner_user_id}: ${e.message}`);
+        Logger.error(`Failed to DM Group Owner ${groupInfo.owner_user_id}: ${e.message}`);
     }
 }
 
@@ -50,6 +52,7 @@ module.exports = {
     name: Events.MessageCreate,
     async execute(message) {
         const executionId = crypto.randomBytes(4).toString('hex');
+        let shouldLogVerbose = false;
 
         try {
             // 1. Always ignore DMs.
@@ -71,13 +74,13 @@ module.exports = {
             // 4. Blacklist Check
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
-				console.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`);
+				logger.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`, executionId);
 				return;
 			}
 
             const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
             if (!groupInfo) {
-                console.error(`[ERROR] Linked channel exists for deleted group ${sourceChannelInfo.group_id}. Cleanup required.`);
+                Logger.error(`[ERROR] Linked channel exists for deleted group ${sourceChannelInfo.group_id}. Cleanup required.`);
                 db.prepare('DELETE FROM linked_channels WHERE group_id = ?').run(sourceChannelInfo.group_id);
                 return;
             }
@@ -139,7 +142,7 @@ module.exports = {
                                                    `**Original Message:**\n> ${message.content}\n` +
                                                    `**Link:** ${message.url}`;
                                     await notifyGroupOwner(message.client, groupInfo, report);
-                                    console.warn(`[FILTER-BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.\n\n${report}`);
+                                    Logger.warn(`[FILTER-BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.\n\n${report}`);
                                 } catch (e) {} // Ignore if already blocked
                                 
                                 return; // DO NOT RELAY
@@ -167,7 +170,7 @@ module.exports = {
                 if (!stats.warning_sent_at) {
                     try {
                         groupsBeingWarned.add(sourceChannelInfo.group_id);
-                        console.log(`[RATE LIMIT] Group "${groupInfo.group_name}" exceeded limit. Sending warning.`);
+                        Logger.warn(`[RATE LIMIT] Group "${groupInfo.group_name}" exceeded limit. Sending warning.`);
                         const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
                         const now = new Date();
                         const nextResetTime = new Date();
@@ -200,7 +203,7 @@ module.exports = {
             const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
             if (targetChannels.length === 0) return;
 
-            console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+            Logger.debug(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
 
             for (const target of targetChannels) {
                 let replyEmbed = null;
@@ -459,56 +462,31 @@ module.exports = {
                         executionId: executionId,
                         stickerData: stickerData
                     };
-
+                    relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta, message.client);
                     relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta);
 
                  } catch (error) {
+                    if (error.code === 40005) shouldLogVerbose = true;
+                   
                     const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
                     if (error.code === 10015) {
-                        console.warn(`[AUTO-REPAIR][${executionId}] Webhook missing for channel #${targetChannelNameForError}. Attempting to repair...`);
-                        
-                        try {
-                            // 1. Attempt Repair
-                            const channel = await message.client.channels.fetch(target.channel_id);
-                            // Create new webhook
-                            const newWebhook = await channel.createWebhook({ name: 'RelayBot', reason: 'Auto-repairing deleted webhook' });
-                            
-                            // Update Database
-                            db.prepare('UPDATE linked_channels SET webhook_url = ? WHERE channel_id = ?').run(newWebhook.url, target.channel_id);
-                            console.log(`[AUTO-REPAIR][${executionId}] Success! Repaired webhook for #${targetChannelNameForError}. Retrying send...`);
-                            
-                            // Retry sending the original message
-                            const retryClient = new WebhookClient({ url: newWebhook.url });
-                            await retryClient.send(finalPayloadForSend);
-
-                        } catch (repairError) {
-                            // 2. Repair Failed (Bot missing permissions or kicked)
-                            console.error(`[AUTO-REPAIR-FAIL][${executionId}] Repair failed: ${repairError.message}. Proceeding to cleanup.`);
-                            
-                            // 3. Notify the Channel (if possible)
-                            try {
-                                const brokenChannel = await message.client.channels.fetch(target.channel_id);
-                                if (brokenChannel) {
-                                    await brokenChannel.send("⚠️ **Relay Connection Lost:** The webhook for this channel is invalid and could not be auto-repaired (check bot permissions).\n\n**Action Required:** An admin must run `/relay link_channel` to reconnect.");
-                                }
-                            } catch (notifyError) {
-                                console.warn(`[AUTO-CLEANUP-WARN] Could not notify channel ${target.channel_id}.`);
-                            }
-
-                            // 4. Delete the link
-                            db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(target.channel_id);
-                        }
+                        Logger.warn(`[AUTO-REPAIR][${executionId}] Webhook missing for channel #${targetChannelNameForError}. Attempting to repair...`);
+                        webhookManager.handleInvalidWebhook(message.client, target.channel_id, groupInfo.group_name);
                     } else {
                         const errorCode = error.code || 'N/A';
                         const errorMsg = error.message || 'Unknown error occurred';
-                        console.error(`[RELAY-LOOP-ERROR][${executionId}] FAILED to process relay for target #${targetChannelNameForError}. Code: ${errorCode} | Error: ${errorMsg}`);
+                        Logger.error(`[RELAY-LOOP-ERROR][${executionId}] FAILED to process relay for target #${targetChannelNameForError}. Code: ${errorCode} | Error: ${errorMsg}`);
                     }
-                   console.error(`[RELAY-LOOP-ERROR][${executionId}] ${error.message}`);
                 }
             }
+
+            if (shouldLogVerbose) {
+                Logger.warn('VERBOSE', `Verbose logging triggered for ${executionId} due to errors/empty payload.`);
+            }
+
         } catch (error) {
-            console.error(`[ERROR] Code:`, error.code);
-            console.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id} ${error.message}.`, error);
+            Logger.error(`[ERROR] Code:`, error.code);
+            Logger.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id} ${error.message}.`, error);
         }
     },
 };

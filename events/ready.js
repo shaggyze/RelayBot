@@ -5,6 +5,7 @@ const { version } = require('../package.json');
 const { createVoteMessage } = require('../utils/voteEmbed.js');
 const { fetchSupporterIds, isSupporter, setApiSubscribers, getSupporterSet, refreshSupportedGuilds, isGroupSupported } = require('../utils/supporterManager.js');
 const { uploadDatabase } = require('../utils/backupManager.js');
+const webhookManager = require('../utils/webhookManager.js');
 
 const PREMIUM_SKU_ID = '1436488229455925299';
 
@@ -134,37 +135,13 @@ async function runDailyVoteReminder(client) {
                 await webhookClient.send(votePayload);
             } catch (error) {
                 // Handle Invalid Webhook (10015) with Repair -> Notify -> Delete
-                if (error.code === 10015) {
-                    console.warn(`[Tasks] Webhook invalid for channel ${channelInfo.channel_id}. Attempting repair...`);
-                    try {
-                        // 1. Attempt Repair
-                        const channel = await client.channels.fetch(channelInfo.channel_id);
-                        const newWebhook = await channel.createWebhook({ name: 'RelayBot', reason: 'Auto-repair during vote reminder' });
-                        
-                        db.prepare('UPDATE linked_channels SET webhook_url = ? WHERE channel_id = ?').run(newWebhook.url, channelInfo.channel_id);
-                        
-                        // Retry sending the vote reminder
-                        const retryClient = new WebhookClient({ url: newWebhook.url });
-                        await retryClient.send(votePayload);
-                        console.log(`[Tasks] Successfully repaired webhook for channel ${channelInfo.channel_id}`);
-
-                    } catch (repairError) {
-                        console.error(`[Tasks] Repair failed for channel ${channelInfo.channel_id}: ${repairError.message}`);
-
-                        // 2. Notify Channel
-                        try {
-                            const brokenChannel = await client.channels.fetch(channelInfo.channel_id);
-                            if (brokenChannel) {
-                                await brokenChannel.send("⚠️ **Relay Connection Lost:** The webhook for this channel is invalid and could not be auto-repaired.\n\n**Action Required:** An admin must run `/relay link_channel` to reconnect.");
-                            }
-                        } catch (e) { /* Ignore notification errors */ }
-
-                        // 3. Delete Link
-                        db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
-                    }
-                } 
-                // Handle other fatal errors (Unknown Channel/Missing Access) immediately
-                else if (error.code === 10003 || error.code === 50001) {
+            if (error.code === 10015) {
+                // [THE FIX] Use the Manager
+                const newClient = await webhookManager.handleInvalidWebhook(client, channelInfo.channel_id, 'Vote Reminder');
+                if (newClient) {
+                    // Retry send
+                    await newClient.send(votePayload).catch(() => {});
+                } else if (error.code === 10003 || error.code === 50001) {
                     console.warn(`[Tasks] Channel inaccessible (${error.code}). Removing link for ${channelInfo.channel_id}.`);
                     db.prepare('DELETE FROM linked_channels WHERE channel_id = ?').run(channelInfo.channel_id);
                 }
