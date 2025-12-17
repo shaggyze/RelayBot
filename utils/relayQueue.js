@@ -90,7 +90,6 @@ class RelayQueue {
                     this.queue.unshift(item);
                 }
                 // If null, it was deleted/cleaned up automatically by the manager.
-            } 
 			} else if (error.code === 50006 && payload.sticker_ids) {
                  console.log(`[QUEUE-RETRY][${meta.executionId}] Sticker relay failed. Retrying with link fallback.`);
                  
