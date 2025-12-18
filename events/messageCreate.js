@@ -58,9 +58,12 @@ module.exports = {
             // 1. Always ignore DMs.
             if (!message.guild) return;
 
-            // 2. MASTER SELF-IGNORE
-            if (message.applicationId === message.client.user.id) return;
+            // 2. MASTER SELF-IGNORE (LOOP PROTECTION)
+            // Ignore messages from the bot's user account
             if (message.author.id === message.client.user.id) return;
+            // Ignore messages from webhooks OWNED by this bot (Shared Application ID)
+            // This stops the bot from replying to itself, while allowing OTHER webhooks.
+            if (message.webhookId && message.applicationId === message.client.user.id) return;
             
             const sourceChannelInfo = db.prepare("SELECT * FROM linked_channels WHERE channel_id = ? AND direction IN ('BOTH', 'SEND_ONLY')").get(message.channel.id);
             if (!sourceChannelInfo) return;
@@ -74,7 +77,7 @@ module.exports = {
             // 4. Blacklist Check
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
-				logger.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`, executionId);
+				Logger.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`, executionId);
 				return;
 			}
 
@@ -182,7 +185,7 @@ module.exports = {
                         warningPayload.avatarURL = message.client.user.displayAvatarURL();
                         warningPayload.content = `**Daily character limit of ${RATE_LIMIT_CHARS.toLocaleString()} reached!**\n\nRelaying is paused. It will resume next reset or when a supporter joins.`;
                         for (const target of allTargetChannels) {
-                            relayQueue.add(target.webhook_url, warningPayload, db, { targetChannelId: 'WARNING_SYSTEM' });
+                            relayQueue.add(target.webhook_url, warningPayload, db, { targetChannelId: 'WARNING_SYSTEM', executionId: executionId }, message.client);
                         }
                         db.prepare('UPDATE group_stats SET warning_sent_at = ? WHERE group_id = ? AND day = ?').run(Date.now(), sourceChannelInfo.group_id, rateLimitDayString);
                     } finally {
