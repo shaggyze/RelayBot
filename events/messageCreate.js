@@ -476,7 +476,6 @@ module.exports = {
                         stickerData: stickerData
                     };
                     relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta, message.client);
-                    relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta);
 
                  } catch (error) {
                     if (error.code === 40005) shouldLogVerbose = true;
