@@ -19,6 +19,8 @@ class RelayQueue {
      * @param {object} meta - Metadata (original ID, channel IDs for DB insert)
      */
     add(webhookUrl, payload, db, meta, client) {
+        // Ensure client is actually passed into the object
+        if (!client) console.warn(`[QUEUE] Warning: Item added to queue without Client object for target ${meta.targetChannelId}`);
         this.queue.push({ webhookUrl, payload, db, meta, client, attempt: 1 });
         this.process();
     }

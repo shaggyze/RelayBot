@@ -200,10 +200,19 @@ module.exports = {
 			}
             const avatarURL = message.author.displayAvatarURL();
             
-            const targetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
+            // [THE FIX] Added DISTINCT to the query to help, but we will also deduplicate in code
+            const rawTargetChannels = db.prepare(`SELECT * FROM linked_channels WHERE group_id = ? AND channel_id != ? AND direction IN ('BOTH', 'RECEIVE_ONLY')`).all(sourceChannelInfo.group_id, message.channel.id);
+            
+            // [THE FIX] Manually deduplicate based on channel_id to be 100% safe against DB errors
+            const targetChannelsMap = new Map();
+            for (const t of rawTargetChannels) {
+                targetChannelsMap.set(t.channel_id, t);
+            }
+            const targetChannels = Array.from(targetChannelsMap.values());
+
             if (targetChannels.length === 0) return;
 
-            Logger.debug(`[DEBUG][${executionId}] Found ${targetChannels.length} target channel(s) to relay to for group "${groupInfo.group_name}".`);
+            console.log(`[DEBUG][${executionId}] Found ${targetChannels.length} unique target channel(s) to relay to for group "${groupInfo.group_name}".`);
 
             for (const target of targetChannels) {
                 let replyEmbed = null;
