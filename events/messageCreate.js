@@ -77,13 +77,13 @@ module.exports = {
             // 4. Blacklist Check
 			const isBlocked = db.prepare('SELECT 1 FROM group_blacklist WHERE group_id = ? AND (blocked_id = ? OR blocked_id = ?)').get(sourceChannelInfo.group_id, message.author.id, message.guild.id);
 			if (isBlocked) {
-				Logger.warn(`[BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.`, executionId);
+				Logger.warn('BLOCK', `Message stopped from ${message.author.username} (${message.author.id}) in ${message.guild.name}`, executionId);
 				return;
 			}
 
             const groupInfo = db.prepare('SELECT group_name FROM relay_groups WHERE group_id = ?').get(sourceChannelInfo.group_id);
             if (!groupInfo) {
-                Logger.error(`[ERROR] Linked channel exists for deleted group ${sourceChannelInfo.group_id}. Cleanup required.`);
+                Logger.error('DB-ERROR', `Linked channel exists for deleted group ${sourceChannelInfo.group_id}. Cleanup required.`, executionId);
                 db.prepare('DELETE FROM linked_channels WHERE group_id = ?').run(sourceChannelInfo.group_id);
                 return;
             }
@@ -145,7 +145,7 @@ module.exports = {
                                                    `**Original Message:**\n> ${message.content}\n` +
                                                    `**Link:** ${message.url}`;
                                     await notifyGroupOwner(message.client, groupInfo, report);
-                                    Logger.warn(`[FILTER-BLOCK] Message stopped from ${message.author.username} (ID: ${message.author.id}) in server ${message.guild.name} (ID: ${message.guild.id}) for group ${sourceChannelInfo.group_id}.\n\n${report}`);
+                                    Logger.warn('BLOCK', `User ${message.author.id} auto-blocked in group ${sourceChannelInfo.group_id}`, executionId);
                                 } catch (e) {} // Ignore if already blocked
                                 
                                 return; // DO NOT RELAY
@@ -173,7 +173,7 @@ module.exports = {
                 if (!stats.warning_sent_at) {
                     try {
                         groupsBeingWarned.add(sourceChannelInfo.group_id);
-                        Logger.warn(`[RATE LIMIT] Group "${groupInfo.group_name}" exceeded limit. Sending warning.`);
+                        Logger.warn('RATELIMIT', `Group "${groupInfo.group_name}" exceeded limit.`, executionId);
                         const allTargetChannels = db.prepare('SELECT webhook_url FROM linked_channels WHERE group_id = ?').all(sourceChannelInfo.group_id);
                         const now = new Date();
                         const nextResetTime = new Date();
@@ -472,6 +472,7 @@ module.exports = {
                         repliedToId: message.reference ? message.reference.messageId : null,
                         targetChannelId: target.channel_id,
                         executionId: executionId,
+                        groupName: groupInfo.group_name, // Pass for webhookManager
                         stickerData: stickerData
                     };
                     relayQueue.add(target.webhook_url, finalPayloadForSend, db, meta, message.client);
@@ -482,12 +483,12 @@ module.exports = {
                    
                     const targetChannelNameForError = message.client.channels.cache.get(target.channel_id)?.name ?? `ID ${target.channel_id}`;
                     if (error.code === 10015) {
-                        Logger.warn(`[AUTO-REPAIR][${executionId}] Webhook missing for channel #${targetChannelNameForError}. Attempting to repair...`);
+                        Logger.error('AUTO-REPAIR', `Webhook missing for channel #${targetChannelNameForError}. Attempting to repair...`, executionId, error);
                         webhookManager.handleInvalidWebhook(message.client, target.channel_id, groupInfo.group_name);
                     } else {
                         const errorCode = error.code || 'N/A';
                         const errorMsg = error.message || 'Unknown error occurred';
-                        Logger.error(`[RELAY-LOOP-ERROR][${executionId}] FAILED to process relay for target #${targetChannelNameForError}. Code: ${errorCode} | Error: ${errorMsg}`);
+                   Logger.error('RELAY-LOOP-ERROR', `Failed to prep relay for ${target.channel_id}`, executionId, error);
                     }
                 }
             }
@@ -497,8 +498,7 @@ module.exports = {
             }
 
         } catch (error) {
-            Logger.error(`[ERROR] Code:`, error.code);
-            Logger.error(`[FATAL-ERROR][${executionId}] A critical unhandled error occurred in messageCreate for message ${message.id} ${error.message}.`, error);
+            Logger.error('FATAL-ERROR', `Critical unhandled error in messageCreate for message ${message.id}`, executionId, error);
         }
     },
 };
