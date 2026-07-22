@@ -216,6 +216,14 @@ const migrations = [
                 UNIQUE(group_id, user_id, filter_id)
             );
         `
+    },
+    // Version 14: Store the original author's user ID on each relayed message so cross-server
+    // replies ping the correct human (fixes wrong / unrelated reply-mentions on webhook replies).
+    {
+        version: 14,
+        up: `
+            ALTER TABLE relayed_messages ADD COLUMN original_author_id TEXT;
+        `
     }
 ];
 
@@ -235,7 +243,7 @@ if (currentVersion < latestVersion) {
             CREATE TABLE relay_groups (group_id INTEGER PRIMARY KEY AUTOINCREMENT, group_name TEXT NOT NULL UNIQUE, owner_guild_id TEXT NOT NULL, owner_user_id TEXT);
             CREATE TABLE linked_channels (channel_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, webhook_url TEXT NOT NULL, direction TEXT DEFAULT 'BOTH' NOT NULL, allow_forward_delete BOOLEAN DEFAULT 1 NOT NULL, allow_reverse_delete BOOLEAN DEFAULT 0 NOT NULL, delete_delay_hours INTEGER DEFAULT 0 NOT NULL, brand_name TEXT, allow_auto_role_creation BOOLEAN DEFAULT 0 NOT NULL, process_bot_messages BOOLEAN DEFAULT 0 NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE);
             CREATE TABLE role_mappings (mapping_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, guild_id TEXT NOT NULL, role_name TEXT NOT NULL, role_id TEXT NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, guild_id, role_name));
-            CREATE TABLE relayed_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, original_message_id TEXT NOT NULL, original_channel_id TEXT NOT NULL, relayed_message_id TEXT NOT NULL, relayed_channel_id TEXT NOT NULL, replied_to_id TEXT);
+            CREATE TABLE relayed_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, original_message_id TEXT NOT NULL, original_channel_id TEXT NOT NULL, relayed_message_id TEXT NOT NULL, relayed_channel_id TEXT NOT NULL, replied_to_id TEXT, original_author_id TEXT);
             CREATE TABLE group_stats (stat_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, day TEXT NOT NULL, character_count INTEGER NOT NULL DEFAULT 0, warning_sent_at INTEGER, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, day));
             CREATE TABLE group_blacklist (blacklist_id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, blocked_id TEXT NOT NULL, type TEXT NOT NULL, FOREIGN KEY (group_id) REFERENCES relay_groups(group_id) ON DELETE CASCADE, UNIQUE(group_id, blocked_id));
             CREATE TABLE guild_subscriptions (guild_id TEXT PRIMARY KEY, is_active BOOLEAN NOT NULL DEFAULT 0, expires_at INTEGER, updated_at INTEGER NOT NULL);
