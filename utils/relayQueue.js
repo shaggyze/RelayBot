@@ -49,13 +49,14 @@ class RelayQueue {
                 try {
                     const repliedToOriginalId = meta.repliedToId || null;
                     db.prepare(
-                        'INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, replied_to_id) VALUES (?, ?, ?, ?, ?)'
+                        'INSERT INTO relayed_messages (original_message_id, original_channel_id, relayed_message_id, relayed_channel_id, replied_to_id, original_author_id) VALUES (?, ?, ?, ?, ?, ?)'
                     ).run(
                         meta.originalMsgId,
                         meta.originalChannelId,
                         relayedMessage.id,
                         relayedMessage.channel_id,
-                        repliedToOriginalId
+                        repliedToOriginalId,
+                        meta.originalAuthorId || null
                     );
                 } catch (dbError) {
                     Logger.error('QUEUE-DB-ERR', `Failed to save record for ${meta.originalMsgId}`, meta.executionId, dbError);
