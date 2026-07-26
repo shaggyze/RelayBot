@@ -274,11 +274,33 @@ module.exports = {
                                 .setAuthor({ name: `Replying to ${repliedAuthorName}`, url: messageLink, iconURL: repliedAuthorAvatar })
                                 .setDescription(repliedContent);
                             
-                            // [SMART PING] Check if user already mentioned the author manually
-                            const isAlreadyMentioned = message.mentions.users.has(repliedMessage.author.id);
-                            
-                            if (!isAlreadyMentioned) {
-                                replyPing = `<@${repliedMessage.author.id}> `;
+                            // [SMART PING] Resolve the TRUE original author of the replied-to message.
+                            // When replying to a relayed (webhook) message, repliedMessage.author.id is the
+                            // webhook — not the human — which previously made the ping resolve to the wrong /
+                            // unrelated user in other servers. Recover the real author from relayed_messages.
+                            let originalAuthorId;
+                            if (repliedMessage.webhookId) {
+                                const authorInfo = db.prepare('SELECT original_author_id FROM relayed_messages WHERE original_message_id = ? AND original_author_id IS NOT NULL LIMIT 1').get(rootOriginalId);
+                                originalAuthorId = authorInfo ? authorInfo.original_author_id : null;
+                            } else {
+                                originalAuthorId = repliedMessage.author.id;
+                            }
+
+                            if (originalAuthorId && !message.mentions.users.has(originalAuthorId)) {
+                                // Only turn it into a real ping if the author is actually a MEMBER of the target
+                                // server. Otherwise leave it unlinked — the "Replying to …" embed already shows
+                                // their name — so we never ping an unrelated user in another server.
+                                let isMemberOfTarget = false;
+                                try {
+                                    const targetGuildForPing = await message.client.guilds.fetch(target.guild_id).catch(() => null);
+                                    if (targetGuildForPing) {
+                                        const targetMember = await targetGuildForPing.members.fetch(originalAuthorId).catch(() => null);
+                                        isMemberOfTarget = !!targetMember;
+                                    }
+                                } catch { isMemberOfTarget = false; }
+                                if (isMemberOfTarget) {
+                                    replyPing = `<@${originalAuthorId}> `;
+                                }
                             }
                         }
                     }
@@ -468,6 +490,7 @@ module.exports = {
                     
                     const meta = {
                         originalMsgId: message.id,
+                        originalAuthorId: message.author.id,
                         originalChannelId: message.channel.id,
                         repliedToId: message.reference ? message.reference.messageId : null,
                         targetChannelId: target.channel_id,
