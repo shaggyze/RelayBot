@@ -31,7 +31,8 @@ RelayBot is designed for communities that span multiple Discord servers, like ga
 There are two ways to use RelayBot: inviting an official public bot (if available) or self-hosting your own private instance for full control.
 
 ### Public-Hosting
-(public bot on railway.app)
+
+Invite the official public bot (self-hosted on the maintainer's infrastructure):
 
 - [Discord Install](https://discord.com/oauth2/authorize?client_id=1397069734469435446)
 
@@ -39,11 +40,29 @@ There are two ways to use RelayBot: inviting an official public bot (if availabl
 
 ### Self-Hosting (Recommended)
 
-The easiest way to host your own bot is with Railway. The button below will guide you through setting up your own private instance.
+The easiest way to run your own instance is with Docker.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/HbhYGF?referralCode=hmJrvY)
+1. Clone this repo.
+2. Create a `.env` file in the project root (see the variables below).
+3. Start it:
 
-For manual installation instructions and troubleshooting, please see the sections at the bottom of this guide.
+   ```bash
+   docker compose up -d
+   docker compose logs -f   # look for: Ready! Logged in as ...
+   ```
+
+**Environment variables (`.env`):**
+
+| Variable | Required | Description |
+|---|---|---|
+| `DISCORD_TOKEN` | yes | Bot token from the Discord Developer Portal |
+| `CLIENT_ID` | yes | Your application's client ID |
+| `DEV_GUILD_ID` | no | Guild ID for instant (guild-scoped) command registration during development |
+| `UPLOAD_SECRET_KEY` | no | Shared secret for the `/owner upload_db` database backup endpoint |
+
+The SQLite database is persisted in the `relaybot_data` Docker volume at `/data/database.db` and migrates automatically on startup. To restore an existing database, copy your `database.db` into that volume before first start.
+
+For manual (non-Docker) installation and troubleshooting, see the sections at the bottom of this guide.
 
 ## 🤖 Bot Usage Guide
 
