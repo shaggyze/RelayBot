@@ -7,7 +7,7 @@ const { fetchSupporterIds, isSupporter, setApiSubscribers, getSupporterSet, refr
 const { uploadDatabase } = require('../utils/backupManager.js');
 const webhookManager = require('../utils/webhookManager.js');
 
-const PREMIUM_SKU_ID = '1436488229455925299';
+const PREMIUM_SKU_ID = '1441846633800138863';
 
 async function manageDevServerRole(client) {
     const devGuildId = process.env.DEV_GUILD_ID; 

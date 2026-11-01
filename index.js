@@ -4,6 +4,26 @@ const path = require('path');
 const { Client, Collection, GatewayIntentBits, Options } = require('discord.js');
 require('dotenv').config();
 
+// Route ONLY Discord REST through the VPS proxy so Discord sees the VPS IP, not
+// the home LAN IP (prevents LAN rate-limit/ban). Local/website traffic stays direct.
+if (process.env.DISCORD_PROXY) {
+    const { Agent, ProxyAgent, setGlobalDispatcher } = require('undici');
+    const direct = new Agent();
+    const proxy = new ProxyAgent(process.env.DISCORD_PROXY);
+    const isDiscord = (h) => /(^|\.)discord(app)?\.com$/.test(h) || /(^|\.)discord\.gg$/.test(h);
+    setGlobalDispatcher({
+        dispatch(opts, handler) {
+            let host = '';
+            try { host = new URL(opts.origin).host.split(':')[0]; } catch (e) {}
+            return (isDiscord(host) ? proxy : direct).dispatch(opts, handler);
+        },
+        close() { return Promise.all([direct.close(), proxy.close()]); },
+        destroy() { return Promise.all([direct.destroy(), proxy.destroy()]); },
+    });
+    console.log('[proxy] Discord REST via ' + process.env.DISCORD_PROXY + ' (local direct)');
+}
+
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
