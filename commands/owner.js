@@ -7,7 +7,7 @@ const { isSupporter, getSupporterSet, isGroupSupported } = require('../utils/sup
 const { uploadDatabase } = require('../utils/backupManager.js');
 
 const BOT_OWNER_ID = '182938628643749888';
-const PREMIUM_SKU_ID = '1436488229455925299';
+const PREMIUM_SKU_ID = '1441846633800138863';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 

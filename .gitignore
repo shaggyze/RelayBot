@@ -7,3 +7,11 @@
 # Database
 database.db
 database.db-journal
+.env
+database.db
+*.db-wal
+*.db-shm
+
+# Secret backups
+.env.bak
+*.env.bak

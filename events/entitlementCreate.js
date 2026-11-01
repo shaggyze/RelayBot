@@ -2,7 +2,7 @@
 const { Events } = require('discord.js');
 const db = require('../db/database.js');
 
-const PREMIUM_SKU_ID = '1436488229455925299';
+const PREMIUM_SKU_ID = '1441846633800138863';
 
 module.exports = {
     name: Events.EntitlementCreate,
